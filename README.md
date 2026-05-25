@@ -7,6 +7,8 @@
 > **最新版本**: v1.0.0  
 > **下载地址**: [Releases](https://github.com/MR-LIYA/user/releases/tag/v1.0.1/MHY_Scanner.exe)
 
+首次运行时需要等待一会，以便产生对应的配置文件。
+
 ---
 
 ## 功能特性
@@ -245,7 +247,7 @@ pyinstaller --onefile --windowed \
 
 1. 下载 `MHY_Scanner.exe`
 2. 确保系统已安装 [VC++ Redist 运行时](https://aka.ms/vs/17/release/vc_redist.x64.exe)
-3. 直播流扫描需要安装 FFmpeg 并加入 PATH
+3. 直播流扫描需要安装 FFmpeg 并加入 PATH（Windw）
 
 ---
 
@@ -318,7 +320,7 @@ pyinstaller --onefile --windowed \
 - 窗口置顶、自动启动扫描
 - 自动二次确认登录
 - 优化屏幕监视功能稳定性
-- 支持日志输出到文件 / 控制台
+- 支持日志输出到文件 / 控制台（发行版本仅支持输出日志到日志文件以免出现问题的时候找不到日志文件）
 
 ---
 
