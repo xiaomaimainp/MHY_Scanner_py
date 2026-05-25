@@ -1,0 +1,13 @@
+PyQt6>=6.4.0
+PyQt6-WebEngine>=6.4.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+requests>=2.31.0
+Pillow>=10.0.0
+mss>=9.0.1
+cryptography>=41.0.0
+python-dateutil>=2.8.0
+qrcode>=7.4.0
+ffmpeg-python
+pyzbar>=0.1.9
+mitmproxy>=10.0.0
