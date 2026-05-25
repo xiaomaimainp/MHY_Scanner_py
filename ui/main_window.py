@@ -1485,14 +1485,29 @@ class MainWindow(QMainWindow):
 
     def check_for_updates(self):
         """检查更新"""
-        from utils.update import check_for_updates
+        from utils.update import check_for_updates, download_and_apply_update
         info = check_for_updates()
-        if info["has_update"]:
-            gui_log(f"发现新版本: {info['version']}")
-            QMessageBox.information(
+        if info.get("check_failed"):
+            gui_log("检查更新失败，请检查网络连接")
+            QMessageBox.warning(self, "检查更新", "检查更新失败，无法连接到 GitHub。\n请检查网络连接后重试。")
+        elif info.get("no_release"):
+            gui_log("仓库暂无 Release 版本")
+            QMessageBox.information(self, "检查更新", "GitHub 仓库尚未发布任何 Release 版本，暂无更新源。")
+        elif info["has_update"]:
+            gui_log(f"发现新版本: V{info['latest_version']}")
+            reply = QMessageBox.information(
                 self, "发现新版本",
-                f"发现新版本: {info['version']}\n\n{info['description']}"
+                f"当前版本: {info['current_version']}\n"
+                f"最新版本: V{info['latest_version']}\n\n"
+                f"是否立即下载更新？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
+            if reply == QMessageBox.StandardButton.Yes:
+                # 开始下载，不阻塞UI
+                success = download_and_apply_update()
+                if success:
+                    gui_log("更新已下载，程序即将退出并重启...")
+                    QApplication.instance().quit()
         else:
             gui_log("当前已是最新版本")
             QMessageBox.information(self, "检查更新", "当前已是最新版本")
