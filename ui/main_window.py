@@ -304,9 +304,14 @@ class MainWindow(QMainWindow):
         
         self.account_table = QTableWidget()
         self.account_table.setColumnCount(5)
-        self.account_table.setHorizontalHeaderLabels(["UID", "用户名", "游戏", "服务器", "备注"])
+        self.account_table.setHorizontalHeaderLabels(["", "UID", "用户名", "服务器", "备注"])
         self.account_table.setShowGrid(SHOW_GRID)
         self.account_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.account_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.account_table.setColumnWidth(0, 18)
+        self.account_table.horizontalHeader().setStyleSheet(
+            "QHeaderView::section:first { border-right: none; }"
+        )
         self.account_table.verticalHeader().hide()  # 隐藏行号
         self.account_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.account_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -332,9 +337,6 @@ class MainWindow(QMainWindow):
         self.account_table.viewport().installEventFilter(self)  # 安装事件过滤器用于悬浮高亮
         self.account_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.account_table.customContextMenuRequested.connect(self.on_context_menu)
-        # 设置游戏列的下拉委托
-        self.game_combo_delegate = GameComboDelegate(self)
-        self.account_table.setItemDelegateForColumn(2, self.game_combo_delegate)
         main_layout.addWidget(self.account_table)
         
         # 控制按钮区域
@@ -507,30 +509,26 @@ class MainWindow(QMainWindow):
             # 检查是否为默认账号
             is_default = self.config.is_default_account(account.uid, account.server_type)
             name = account.name
-            if is_default:
-                name = f"★ {name}"  # 添加星号标记
 
             # 设置单元格内容
+            dot_item = QTableWidgetItem("●" if is_default else "")
             uid_item = QTableWidgetItem(account.uid)
             name_item = QTableWidgetItem(name)
-            game_item = QTableWidgetItem(
-                self.account_manager.get_game_name(GameType(account.game_type))
-            )
             server_item = QTableWidgetItem(
                 self.account_manager.get_server_name(ServerType(account.server_type))
             )
             notes_item = QTableWidgetItem(account.notes)
 
-            # UID、用户名、游戏、服务器居中，备注左对齐（垂直均居中）
+            # 黑点列居中，其余列对齐设置
+            dot_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
             uid_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
             name_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
-            game_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
             server_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter)
             notes_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
 
-            self.account_table.setItem(row, 0, uid_item)
-            self.account_table.setItem(row, 1, name_item)
-            self.account_table.setItem(row, 2, game_item)
+            self.account_table.setItem(row, 0, dot_item)
+            self.account_table.setItem(row, 1, uid_item)
+            self.account_table.setItem(row, 2, name_item)
             self.account_table.setItem(row, 3, server_item)
             self.account_table.setItem(row, 4, notes_item)
 
@@ -548,7 +546,7 @@ class MainWindow(QMainWindow):
         
         # 遍历表格找到默认账号（判断逻辑与 get_server_type_from_table 保持一致）
         for row in range(self.account_table.rowCount()):
-            uid_item = self.account_table.item(row, 0)
+            uid_item = self.account_table.item(row, 1)
             server_text = self.account_table.item(row, 3).text()
             if uid_item and server_text:
                 uid = uid_item.text()
@@ -669,11 +667,9 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(QTableWidgetItem)
     def on_table_double_clicked(self, item: QTableWidgetItem):
-        """表格双击编辑（游戏列和备注列可编辑）"""
+        """表格双击编辑（备注列可编辑）"""
         row = item.row()
-        if item.column() == 2:  # 游戏列
-            self.account_table.editItem(item)
-        elif item.column() == 4:  # 备注列
+        if item.column() == 4:  # 备注列
             self.account_table.editItem(item)
         else:
             # 选中账号
@@ -684,7 +680,7 @@ class MainWindow(QMainWindow):
         """表格项目修改后保存"""
         row = item.row()
         # 获取该行的账号信息
-        uid_item = self.account_table.item(row, 0)
+        uid_item = self.account_table.item(row, 1)
         server_item = self.account_table.item(row, 3)
         if not (uid_item and server_item):
             return
@@ -692,19 +688,7 @@ class MainWindow(QMainWindow):
         uid = uid_item.text()
         server_type = 1 if server_item.text() == "官服" else 2
 
-        if item.column() == 2:  # 游戏列
-            # 根据游戏名称获取对应的 GameType
-            game_name = item.text()
-            game_type_map = {
-                "崩坏3": GameType.Honkai3,
-                "原神": GameType.Genshin,
-                "星穹铁道": GameType.HonkaiStarRail,
-                "绝区零": GameType.ZenlessZoneZero,
-            }
-            if game_name in game_type_map:
-                self.account_manager.update_game_type(uid, server_type, game_type_map[game_name])
-                main_log(f"游戏已保存: uid={uid}, server={server_type}, game={game_name}")
-        elif item.column() == 4:  # 备注列
+        if item.column() == 4:  # 备注列
             notes = item.text()
             self.account_manager.update_notes(uid, server_type, notes)
             main_log(f"备注已保存: uid={uid}, server={server_type}, notes={notes}")
@@ -722,7 +706,7 @@ class MainWindow(QMainWindow):
         if current_row < 0:
             current_row = 0
         
-        uid_item = self.account_table.item(current_row, 0)
+        uid_item = self.account_table.item(current_row, 1)
         
         add_action = menu.addAction("添加账号")
         add_action.triggered.connect(self.show_add_account_dialog)
@@ -882,7 +866,7 @@ class MainWindow(QMainWindow):
         # 设置整行选中
         self.account_table.selectRow(row)
         
-        uid = self.account_table.item(row, 0).text()
+        uid = self.account_table.item(row, 1).text()
         server_type = self.get_server_type_from_table(row)
         
         self.selected_account = self.account_manager.get_account(uid, server_type)
@@ -1421,7 +1405,7 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            uid = self.account_table.item(current_row, 0).text()
+            uid = self.account_table.item(current_row, 1).text()
             server_type = self.get_server_type_from_table(current_row)
 
             main_log(f"删除账号: uid={uid}, server_type={server_type}")
@@ -1494,11 +1478,11 @@ class MainWindow(QMainWindow):
             gui_log("仓库暂无 Release 版本")
             QMessageBox.information(self, "检查更新", "GitHub 仓库尚未发布任何 Release 版本，暂无更新源。")
         elif info["has_update"]:
-            gui_log(f"发现新版本: V{info['latest_version']}")
+            gui_log(f"发现新版本: {info['latest_version']}")
             reply = QMessageBox.information(
                 self, "发现新版本",
                 f"当前版本: {info['current_version']}\n"
-                f"最新版本: V{info['latest_version']}\n\n"
+                f"最新版本: {info['latest_version']}\n\n"
                 f"是否立即下载更新？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
