@@ -5,7 +5,7 @@
 参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
 > **最新版本**: v1.0.0  
-> **下载地址**: [Releases](https://github.com/MR-LIYA/user/releases/tag/v1.0.1/MHY_Scanner.exe)
+> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/MHY_Scanner.exe)
 
 首次运行时需要等待一会，以便产生对应的配置文件。
 
@@ -45,7 +45,7 @@
 
 | 项目 | 要求 |
 | ------ | ------ |
-| 操作系统 | Windows 10+（主要测试环境） |
+| 操作系统 | Windows 10 21H2及以上版本（主要测试环境） |
 | Python 版本 | 3.8+ |
 | 内存 | 建议 4GB+ |
 | FFmpeg | 直播流扫描需要（加入系统 PATH） |
@@ -247,7 +247,7 @@ pyinstaller --onefile --windowed \
 
 1. 下载 `MHY_Scanner.exe`
 2. 确保系统已安装 [VC++ Redist 运行时](https://aka.ms/vs/17/release/vc_redist.x64.exe)
-3. 直播流扫描需要安装 FFmpeg 并加入 PATH（Windw）
+3. 直播流扫描需要安装 FFmpeg 并加入 PATH
 
 ---
 
@@ -256,7 +256,7 @@ pyinstaller --onefile --windowed \
 ### 使用注意
 
 1. **米游社 APP**：扫码登录需要在手机上安装米游社 APP 并已登录目标账号
-2. **B站崩坏3**：仅支持崩坏3 BiliBili 服，登录可能需要完成 GeeTest 滑块验证（由于本人没有崩坏3 BiliBili 服，因此本人无法确保此功能正常使用。）
+2. **B站崩坏3**：仅支持崩坏3 BiliBili 服，登录可能需要完成 GeeTest 滑块验证
 3. **直播流扫描**：需要先在系统上安装 FFmpeg，并确保非免流直播间
 4. **网络环境**：需要能够正常访问米哈游 API（`api-sdk.mihoyo.com` 等域名）
 5. **配置编辑器**：使用内置配置编辑器修改配置文件前建议备份，格式错误可能导致程序异常
@@ -309,18 +309,11 @@ pyinstaller --onefile --windowed \
 
 ## 更新日志
 
-### v1.0.0 (2026-05)
+### v1.0.1 (2026-05-28)
 
-- 支持崩坏3、原神、星穹铁道、绝区零 扫码登录
-- 支持官服 / BiliBili 服
-- 支持屏幕扫描和直播流扫描
-- 支持多账号管理与默认账号功能
-- 支持 Cookie 登录与 B站崩坏3 登录
-- 内置配置文件编辑器（JSON 语法高亮）
-- 窗口置顶、自动启动扫描
-- 自动二次确认登录
-- 优化屏幕监视功能稳定性
-- 支持日志输出到文件 / 控制台（发行版本仅支持输出日志到日志文件以免出现问题的时候找不到日志文件）
+- 修复了验证码登录的问题，现在可以使用验证码了
+- 修复了一些小问题
+- 当前版本验证码暂不支持HarmonyOS及IOS，后续修复
 
 ---
 
