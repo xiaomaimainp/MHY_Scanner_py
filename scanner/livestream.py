@@ -3,13 +3,11 @@
 支持B站和抖音直播平台
 """
 import json
-import re
 import traceback
 import requests
 from enum import IntEnum
-from typing import Tuple, Optional, Dict, Any
-import subprocess
-from core.logger import bili_log, douyin_log, error, debug, LogLevel
+from typing import Tuple, Dict, Any
+from core.logger import bili_log, douyin_log, error, LogLevel
 
 
 class LivePlatform(IntEnum):
@@ -37,167 +35,167 @@ class LiveStreamInfo:
 
 
 class LiveBili:
-    """B站直播获取"""
-    
+    """B站直播获取 —— 严格对齐 C++ 版 LiveStreamLink.cpp 实现"""
+
     API_BASE = "https://api.live.bilibili.com"
-    
+
     def __init__(self, room_id: str):
         self.room_id = room_id
         self.real_room_id = ""
-    
-    def get_real_room_id(self) -> str:
-        """获取真实房间号"""
-        url = f"{self.API_BASE}/room/v1/Room/room_init"
-        params = {"id": self.room_id}
-        
+
+    def _get_stream_url(self, params: dict) -> str:
+        """
+        从 getRoomPlayInfo 响应中提取拼接流URL
+        """
+        url = f"{self.API_BASE}/xlive/web-room/v2/index/getRoomPlayInfo"
         try:
             resp = requests.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            result = resp.json()
-            
-            if result.get("code") == 0:
-                self.real_room_id = str(result["data"]["room_id"])
-                return self.real_room_id
-            else:
-                bili_log(f"room_init 返回: code={result.get('code')}, msg={result.get('msg', 'N/A')}", LogLevel.WARN)
+            if resp.status_code != 200 or not resp.text:
                 return ""
+
+            play_info = resp.json()
+            data = play_info.get("data", {})
+            playurl_info = data.get("playurl_info", {})
+            playurl = playurl_info.get("playurl", {})
+
+            try:
+                stream_list = playurl["stream"]
+                stream = stream_list[0]
+                format_list = stream["format"]
+                fmt = format_list[0]
+                codec_list = fmt["codec"]
+                codec = codec_list[0]
+            except (KeyError, IndexError, TypeError):
+                return ""
+
+            base_url = codec.get("base_url", "")
+            url_info_list = codec.get("url_info", [])
+            if not url_info_list:
+                return ""
+            extra = url_info_list[0].get("extra", "")
+            host = url_info_list[0].get("host", "")
+
+            full_url = host + base_url + extra
+            bili_log(f"流地址: {full_url[:60]}...", LogLevel.DEBUG)
+            return full_url
+
         except Exception as e:
-            error(f"获取B站真实房间号失败: {e}\n{traceback.format_exc()}")
+            bili_log(f"GetStreamUrl 异常: {e}", LogLevel.DEBUG)
             return ""
-    
-    def get_live_stream_url(self) -> Tuple[LiveStreamStatus, str]:
+
+    def get_live_stream_info(self) -> LiveStreamInfo:
         """
-        获取B站直播流地址
-        
-        Returns:
-            (状态, 流URL)
+        获取B站直播流信息
+        严格对应 C++ 版 LiveBili::GetLiveStreamInfo()
         """
-        if not self.real_room_id:
-            self.get_real_room_id()
-        
-        if not self.real_room_id:
-            return LiveStreamStatus.Absent, ""
-        
-        url = f"{self.API_BASE}/xlive/web-room/v2/index/getRoomPlayInfo"
-        params = {
-            "room_id": self.real_room_id,
-            "play_url": 1,
-            "mask": 1,
-            "pt_options": "h265%2Ch264",
-            "force_url": 1,
-            "stream_protocol": "hls",
-            "protocol": "0,1",
-            "format": "0,1,2",
-            "codec": "0,1,2"
-        }
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": f"https://live.bilibili.com/{self.real_room_id}"
-        }
-        
+        info = LiveStreamInfo()
+        info.room_id = self.room_id
+
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
-            resp.raise_for_status()
-            result = resp.json()
-            
-            if result.get("code") != 0:
-                bili_log(f"getRoomPlayInfo 返回: code={result.get('code')}, msg={result.get('message', 'N/A')}", LogLevel.WARN)
-                if result.get("code") == -400 or result.get("code") == 1:
-                    return LiveStreamStatus.NotLive, ""
-                return LiveStreamStatus.Error, ""
-            
-            data = result.get("data", {})
-            
-            # 检查是否开播
-            live_status = data.get("live_status")
-            bili_log(f"live_status={live_status}")
-            
+            # ---- 第1步: room_init 获取房间初始化信息 ----
+            room_init_url = f"{self.API_BASE}/room/v1/Room/room_init"
+            resp = requests.get(room_init_url, params={"id": self.room_id}, timeout=10)
+
+            if resp.status_code != 200 or not resp.text:
+                info.status = LiveStreamStatus.Error
+                return info
+
+            room_info = resp.json()
+            code = room_info.get("code", -1)
+            bili_log(f"room_init code={code}", LogLevel.DEBUG)
+
+            # code == 60004 表示直播间不存在
+            if code == 60004:
+                info.status = LiveStreamStatus.Absent
+                return info
+
+            if code != 0:
+                info.status = LiveStreamStatus.Error
+                return info
+
+            data = room_info.get("data", {})
+            live_status = data.get("live_status", 0)
+            bili_log(f"live_status={live_status} (1=直播中)", LogLevel.DEBUG)
+
+            # live_status != 1 表示未开播
             if live_status != 1:
-                return LiveStreamStatus.NotLive, ""
-            
-            # 获取流URL - 尝试多种方式
-            # 方式1: durl列表
-            play_url_data = data.get("play_url", {})
-            durl = play_url_data.get("durl", [])
-            
-            bili_log(f"durl列表长度: {len(durl)}", LogLevel.DEBUG)
-            
-            if durl:
-                for i, stream in enumerate(durl):
-                    stream_url = stream.get("url", "")
-                    if stream_url:
-                        return LiveStreamStatus.Normal, stream_url
-            
-            # 方式2: 流地址列表 (不同格式)
-            stream_list = data.get("stream_url", [])
-            if stream_list:
-                for stream in stream_list:
-                    if isinstance(stream, dict):
-                        url_val = stream.get("url") or stream.get("main_url")
-                        if url_val:
-                            return LiveStreamStatus.Normal, url_val
-            
-            # 方式3: live_play_url
-            live_play_url = data.get("live_play_url", "")
-            if live_play_url:
-                return LiveStreamStatus.Normal, live_play_url
-            
-            bili_log(f"play_url_data keys: {list(play_url_data.keys()) if play_url_data else 'None'}", LogLevel.DEBUG)
-            bili_log(f"data keys: {list(data.keys())}", LogLevel.DEBUG)
-            return LiveStreamStatus.Error, ""
-            
+                info.status = LiveStreamStatus.NotLive
+                return info
+
+            # 更新真实房间号
+            if "room_id" in data:
+                self.real_room_id = str(data["room_id"])
+
+            # ---- 第2步: GetLinkByRealRoomID ----
+            # C++ 参数: codec=0, format=0,2, only_audio=0, only_video=0, protocol=0,1, qn=10000, room_id
+            play_params = {
+                "codec": "0",
+                "format": "0,2",
+                "only_audio": "0",
+                "only_video": "0",
+                "protocol": "0,1",
+                "qn": "10000",
+                "room_id": self.real_room_id,
+            }
+
+            link = self._get_stream_url(play_params)
+            if link:
+                info.status = LiveStreamStatus.Normal
+                info.link = link
+            else:
+                info.status = LiveStreamStatus.Error
+
+            return info
+
+        except json.JSONDecodeError:
+            info.status = LiveStreamStatus.Error
+            return info
         except Exception as e:
             error(f"获取B站直播流失败: {e}\n{traceback.format_exc()}")
-            return LiveStreamStatus.Error, ""
-    
+            info.status = LiveStreamStatus.Error
+            return info
+
+    def get_live_stream_url(self) -> Tuple[LiveStreamStatus, str]:
+        """获取B站直播流URL，返回 (状态, URL)"""
+        info = self.get_live_stream_info()
+        return info.status, info.link
+
     def get_room_info(self) -> Dict[str, Any]:
         """获取直播间信息"""
         if not self.real_room_id:
-            self.get_real_room_id()
-        
+            self.get_real_room_id()  # 调用空实现保持兼容
         if not self.real_room_id:
             return {}
-        
+
         url = f"{self.API_BASE}/room/v1/Room/get_info"
         params = {"room_id": self.real_room_id}
-        
         try:
             resp = requests.get(url, params=params, timeout=10)
             resp.raise_for_status()
             result = resp.json()
-            
             if result.get("code") == 0:
                 return result.get("data", {})
             return {}
         except Exception:
             return {}
-    
-    def get_live_stream_info(self) -> LiveStreamInfo:
-        """获取完整的直播流信息"""
-        info = LiveStreamInfo()
-        info.room_id = self.room_id
-        
-        # 获取真实房间号
-        self.get_real_room_id()
-        
-        if not self.real_room_id:
-            info.status = LiveStreamStatus.Absent
-            return info
-        
-        info.room_id = self.real_room_id
-        
-        # 获取直播间信息
-        room_info = self.get_room_info()
-        info.title = room_info.get("title", "")
-        info.uname = room_info.get("uname", "")
-        
-        # 获取流地址
-        status, url = self.get_live_stream_url()
-        info.status = status
-        info.link = url
-        
-        return info
+
+    def get_real_room_id(self) -> str:
+        """获取真实房间号（保持兼容）"""
+        if self.real_room_id:
+            return self.real_room_id
+        # 通过 room_init 获取
+        try:
+            resp = requests.get(
+                f"{self.API_BASE}/room/v1/Room/room_init",
+                params={"id": self.room_id}, timeout=10
+            )
+            result = resp.json()
+            if result.get("code") == 0:
+                self.real_room_id = str(result["data"]["room_id"])
+                return self.real_room_id
+        except Exception:
+            pass
+        return ""
 
 
 class LiveDouyin:
@@ -205,8 +203,7 @@ class LiveDouyin:
 
     BASE_URL = "https://live.douyin.com"
 
-    # C++ 版硬编码的 Cookie（包含完整认证令牌，绕过反爬签名校验）
-    # 来源: e:\VSCode\C\MHY_Scanner(C++)\src\Core\LiveStreamLink.cpp 第157行
+    # 硬编码的 Cookie（包含完整认证令牌，绕过反爬签名校验）
     _HARDCODED_COOKIE = (
         "enter_pc_once=1; "
         "UIFID_TEMP=29a1f63ec682dc0a0df227dd163e2b46e3a6390e403335fa4c2c6d1dc0ec5ffa7a288170e8828ecb8b2f0f16b3219daa18ad5d7faf7fb5fbb64df454c3b471cc1db9c0b5eb2cbc8e0cb1e690f5c1fbd6; "
@@ -306,10 +303,6 @@ class LiveDouyin:
                 "Cookie": self._HARDCODED_COOKIE,
             }
 
-            # C++ 版 query string:
-            # "aid=6383&app_name=douyin_web&live_id=1&device_platform=web&
-            #  browser_language=zh-CN&browser_platform=Win32&browser_name=Edge&
-            #  browser_version=139.0.0.0&is_need_double_stream=false&web_rid=" + m_roomID
             params = {
                 "aid": "6383",
                 "app_name": "douyin_web",
