@@ -13,7 +13,6 @@ from core.config import ConfigManager, Account
 from scanner import LivePlatform, get_live_info, LiveStreamStatus
 from core.logger import Logger, scanner_log, qr_log, api_log, poll_log, bili_log, main_log, gui_log, debug, info, warn, error
 
-__version__ = "1.0.0"
 __all__ = [
     "MainWindow",
     "LoginWindow",
