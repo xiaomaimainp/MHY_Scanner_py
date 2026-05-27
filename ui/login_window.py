@@ -149,7 +149,7 @@ class LoginWindow(QDialog):
         # Tab 0: 短信登录（隐藏）
         self.tab_sms = self.create_sms_tab()
         self.tabs.addTab(self.tab_sms, "短信登录")
-        self.tabs.tabBar().setTabVisible(0, False)
+        self.tabs.tabBar().setTabVisible(0, True)
 
         # Tab 1: 扫码登录
         self.tab_qr = self.create_qr_tab()
