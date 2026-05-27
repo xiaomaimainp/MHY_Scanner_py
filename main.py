@@ -38,7 +38,7 @@ def main():
 
     # 设置应用信息
     app.setApplicationName("MHY_Scanner")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion("1.0.1")
     app.setOrganizationName("MHY")
 
     # 设置全局字体
