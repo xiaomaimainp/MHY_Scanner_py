@@ -248,7 +248,8 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("MHY扫码器")
+        from PyQt6.QtWidgets import QApplication
+        self.setWindowTitle(QApplication.instance().applicationName())
         self.setMinimumSize(500, 600)
         self.resize(500, 650)
         
