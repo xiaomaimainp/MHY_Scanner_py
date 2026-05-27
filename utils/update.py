@@ -7,22 +7,23 @@ import os
 import subprocess
 import shutil
 import traceback
+import tempfile
 import requests
-from datetime import datetime
 from core.logger import update_log, error, LogLevel
 
 # Windows 下可能缺少 SSL 证书，禁用证书验证
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+VERSION = "1.0.1"
 
 class UpdateManager:
     """热更新管理器"""
 
     # GitHub Release API（获取最新版本信息）
     GITHUB_API_URL = "https://api.github.com/repos/MR-LIYA/MHY_Scanner/releases?per_page=1"
-    # 下载地址
-    DOWNLOAD_URL = "https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner.exe"
+    # 安装程序下载地址
+    INSTALLER_URL = "https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe"
 
     def __init__(self):
         self.script_path = os.path.abspath(__file__)
@@ -31,13 +32,21 @@ class UpdateManager:
 
     @property
     def current_version(self) -> str:
-        """从 __init__.py 获取当前版本号"""
+        """获取当前版本号（优先读取 QApplication.applicationVersion()，与 main.py 统一）"""
         if self._current_version is None:
+            try:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app and app.applicationVersion():
+                    self._current_version = app.applicationVersion()
+                    return self._current_version
+            except Exception:
+                pass
             try:
                 from __init__ import __version__
                 self._current_version = __version__
             except Exception:
-                self._current_version = "1.0.0"
+                self._current_version = VERSION
         return self._current_version
 
     def restart_program(self):
@@ -97,7 +106,7 @@ class UpdateManager:
             "current_version": self.current_version,
             "latest_version": "",
             "description": "",
-            "download_url": self.DOWNLOAD_URL,
+            "download_url": "",
         }
 
         try:
@@ -122,6 +131,16 @@ class UpdateManager:
             latest_version = tag.lstrip("Vv")
             description = release.get("body", "") or release.get("name", "")
 
+            # 获取下载链接（优先从 release assets 中提取）
+            assets = release.get("assets", [])
+            if assets:
+                result["download_url"] = assets[0].get("browser_download_url", "")
+                # 如果 assets 中没有 .exe，回退到硬编码 URL
+                if not any(a.get("name", "").endswith(".exe") for a in assets):
+                    result["download_url"] = self.INSTALLER_URL
+            else:
+                result["download_url"] = self.INSTALLER_URL
+
             # 校验是否为合法版本号格式（x.x.x）
             if not self._is_valid_version(latest_version):
                 update_log(f"无法解析版本号: {tag}", LogLevel.WARN)
@@ -139,29 +158,27 @@ class UpdateManager:
 
         return result
 
-    def download_and_apply_update(self, progress_callback=None) -> bool:
+    def download_and_apply_update(self, download_url: str = "", progress_callback=None) -> bool:
         """
-        下载新版本 exe 并替换当前程序。
-        替换策略：创建批处理脚本→退出程序→脚本完成替换→重启。
+        下载安装程序 → 启动安装程序 → 退出当前程序
+        安装程序会自行完成安装/覆盖，无需额外处理。
         """
-        exe_path = sys.executable
-        exe_dir = os.path.dirname(exe_path)
-        exe_name = os.path.basename(exe_path)
-
-        # 下载到临时文件
-        tmp_path = os.path.join(exe_dir, f"{exe_name}.update")
-        update_log(f"开始下载更新: {self.DOWNLOAD_URL}")
+        url = download_url or self.INSTALLER_URL
+        update_log(f"开始下载安装程序: {url}")
 
         try:
-            resp = requests.get(self.DOWNLOAD_URL, stream=True, timeout=120, verify=False)
+            resp = requests.get(url, stream=True, timeout=600, verify=False)
             if resp.status_code != 200:
                 error(f"下载失败，HTTP {resp.status_code}")
                 return False
 
+            # 下载到系统临时目录
+            installer_name = "MHY_Scanner_Setup.exe"
+            installer_path = os.path.join(tempfile.gettempdir(), installer_name)
+
             total = int(resp.headers.get("content-length", 0))
             downloaded = 0
-
-            with open(tmp_path, "wb") as f:
+            with open(installer_path, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
@@ -169,38 +186,12 @@ class UpdateManager:
                         if progress_callback and total > 0:
                             progress_callback(int(downloaded / total * 100))
 
-            update_log(f"下载完成: {tmp_path} ({downloaded} bytes)")
+            update_log(f"安装程序下载完成: {installer_path} ({downloaded} bytes)")
+            update_log("启动安装程序，程序即将退出...")
 
-            # 生成替换批处理脚本
-            bat_path = os.path.join(exe_dir, "_updater.bat")
-            backup_path = os.path.join(exe_dir, f"{exe_name}.old")
-            # Windows batch: 等待原进程退出后替换
-            bat_content = (
-                f'@echo off\n'
-                f'echo Waiting for update...\n'
-                f'timeout /t 2 /nobreak >nul\n'
-                f'if exist "{backup_path}" del /f "{backup_path}"\n'
-                f'rename "{exe_path}" "{exe_name}.old"\n'
-                f'rename "{tmp_path}" "{exe_name}"\n'
-                f'if exist "{exe_path}" (\n'
-                f'  echo Update complete, restarting...\n'
-                f'  start "" "{exe_path}"\n'
-                f') else (\n'
-                f'  echo Update failed, restoring backup...\n'
-                f'  rename "{backup_path}" "{exe_name}"\n'
-                f'  start "" "{exe_path}"\n'
-                f')\n'
-                f'del "%~f0"\n'
-            )
-
-            with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_content)
-
-            update_log("替换脚本已生成，即将退出并更新...")
+            # 启动安装程序（/SILENT 静默安装，用户无需操作）
             subprocess.Popen(
-                bat_path,
-                shell=True,
-                cwd=exe_dir,
+                [installer_path, "/SILENT", "/NOCANCEL"],
                 creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0,
             )
             return True
@@ -282,6 +273,6 @@ def reload_module(module_name: str):
     return get_update_manager().reload_module(module_name)
 
 
-def download_and_apply_update(progress_callback=None) -> bool:
+def download_and_apply_update(download_url: str = "", progress_callback=None) -> bool:
     """快捷函数：下载并应用更新"""
-    return get_update_manager().download_and_apply_update(progress_callback)
+    return get_update_manager().download_and_apply_update(download_url, progress_callback)
