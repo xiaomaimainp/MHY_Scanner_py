@@ -313,7 +313,7 @@ pyinstaller --onefile --windowed \
 
 - 修复了验证码登录的问题，现在可以使用验证码了
 - 修复了一些小问题
-- 当前版本验证码暂不支持HarmonyOS及IOS，后续修复
+- 当前版本验证码暂不支持HarmonyOS及IOS，后续版本修复
 
 ---
 
