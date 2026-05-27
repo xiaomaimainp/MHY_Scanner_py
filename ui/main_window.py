@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QLineEdit,
     QMenuBar, QMenu, QMessageBox, QAbstractItemView,
-    QInputDialog, QApplication, QGridLayout, QStyledItemDelegate,
+    QInputDialog, QApplication, QGridLayout, QStyledItemDelegate, QProgressDialog,
     QStyle, QStyleOptionViewItem, QDialog, QTextEdit
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QRegularExpression, QModelIndex, QThread, QObject, pyqtSignal
@@ -117,6 +117,28 @@ class QRCodePollingWorker(QObject):
 
         poll_log("等待超时（轮询达到最大次数）")
         self.qr_timeout.emit()
+
+
+class DownloadUpdateWorker(QObject):
+    """下载更新工作线程（避免 UI 卡死）"""
+    progress = pyqtSignal(int)          # 下载进度 0-100
+    finished = pyqtSignal(bool, str)    # (success, error_msg)
+
+    def __init__(self, download_url: str):
+        super().__init__()
+        self.download_url = download_url
+
+    def run(self):
+        from utils.update import get_update_manager
+        mgr = get_update_manager()
+        try:
+            success = mgr.download_and_apply_update(
+                self.download_url,
+                progress_callback=lambda pct: self.progress.emit(pct)
+            )
+            self.finished.emit(success, "")
+        except Exception as e:
+            self.finished.emit(False, str(e))
 
 
 class GameComboDelegate(QStyledItemDelegate):
@@ -1470,7 +1492,7 @@ class MainWindow(QMainWindow):
 
     def check_for_updates(self):
         """检查更新"""
-        from utils.update import check_for_updates, download_and_apply_update
+        from utils.update import check_for_updates
         info = check_for_updates()
         if info.get("check_failed"):
             gui_log("检查更新失败，请检查网络连接")
@@ -1488,14 +1510,50 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
-                # 开始下载，不阻塞UI
-                success = download_and_apply_update()
-                if success:
-                    gui_log("更新已下载，程序即将退出并重启...")
-                    QApplication.instance().quit()
+                # 后台线程下载，避免 UI 卡死
+                self._start_download_update(info["download_url"])
         else:
             gui_log("当前已是最新版本")
             QMessageBox.information(self, "检查更新", "当前已是最新版本")
+
+    def _start_download_update(self, download_url: str):
+        """启动后台下载更新（带进度对话框）"""
+        self._download_progress = QProgressDialog("正在下载更新...", None, 0, 100, self)
+        self._download_progress.setWindowTitle("下载更新")
+        self._download_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._download_progress.setMinimumDuration(0)
+        self._download_progress.setAutoClose(False)
+        self._download_progress.setAutoReset(False)
+        self._download_progress.setCancelButton(None)  # 下载期间不允许取消
+
+        # 创建工作线程
+        self._download_thread = QThread()
+        self._download_worker = DownloadUpdateWorker(download_url)
+        self._download_worker.moveToThread(self._download_thread)
+
+        # 连接信号
+        self._download_worker.progress.connect(self._download_progress.setValue)
+        self._download_worker.finished.connect(self._on_download_finished)
+        self._download_thread.started.connect(self._download_worker.run)
+        # worker 完成后清理
+        self._download_worker.finished.connect(self._download_thread.quit)
+        self._download_worker.finished.connect(self._download_worker.deleteLater)
+        self._download_thread.finished.connect(self._download_thread.deleteLater)
+
+        self._download_thread.start()
+
+    def _on_download_finished(self, success: bool, error_msg: str):
+        """下载完成回调"""
+        if hasattr(self, "_download_progress"):
+            self._download_progress.close()
+
+        if success:
+            gui_log("更新已下载，程序即将退出并重启...")
+            QMessageBox.information(self, "下载完成", "更新已下载，程序即将退出并启动安装程序。")
+            QApplication.instance().quit()
+        else:
+            gui_log(f"下载更新失败: {error_msg}")
+            QMessageBox.warning(self, "下载失败", f"下载更新失败。\n{error_msg}\n请检查网络连接后重试。")
     
     def show_about(self):
         """显示关于"""
@@ -1532,17 +1590,12 @@ class MainWindow(QMainWindow):
         changelog.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         changelog.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         changelog.setHtml("""
-            <h3>v1.0.0 (2026-05)</h3>
+            <h3>v1.0.1 (2026-05)</h3>
             <ul>
-                <li>支持原神、星穹铁道、绝区零、崩坏3 扫码登录</li>
-                <li>支持官服 / BiliBili 服</li>
-                <li>支持屏幕扫描和直播流扫描</li>
-                <li>支持多账号管理与默认账号</li>
-                <li>支持 Cookie 登录与 B站崩坏3 登录</li>
-                <li>内置配置文件编辑器（JSON 高亮）</li>
-                <li>窗口置顶、自动启动扫描</li>
-                <li>优化屏幕监视功能稳定性</li>
-                <li>目前短信验证码登录功能尚未修复完成，发行版暂时禁用了这个功能（未移除）</li>
+                <li>支持验证码登录</li>
+                <li>修复了验证码登录的问题，现在可以使用验证码了</li>
+                <li>修复了一些小问题</li>
+                <li>当前版本验证码暂不支持HarmonyOS及IOS，后续修复</li>
             </ul>
             <hr>
             <p style='color:gray;font-size:12px;'>本项目为参考项目改进而来，修复了已知 BUG。</p>
