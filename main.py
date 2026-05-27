@@ -37,7 +37,7 @@ def main():
         app.installTranslator(translator2)
 
     # 设置应用信息
-    app.setApplicationName("MHY扫码器")
+    app.setApplicationName("MHY_Scanner")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("MHY")
 
