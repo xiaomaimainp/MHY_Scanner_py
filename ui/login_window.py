@@ -146,7 +146,7 @@ class LoginWindow(QDialog):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
 
-        # Tab 0: 短信登录（隐藏）
+        # Tab 0: 短信登录
         self.tab_sms = self.create_sms_tab()
         self.tabs.addTab(self.tab_sms, "短信登录")
         self.tabs.tabBar().setTabVisible(0, True)
