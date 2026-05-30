@@ -3,6 +3,7 @@
 支持B站和抖音直播平台
 """
 import json
+import re
 import traceback
 import requests
 from enum import IntEnum
@@ -43,13 +44,130 @@ class LiveBili:
         self.room_id = room_id
         self.real_room_id = ""
 
+    @staticmethod
+    def _generate_default_cookies() -> str:
+        """
+        本地动态生成B站所需的全套设备指纹Cookie（仿浏览器行为）。
+        B站绝大部分Cookie由JavaScript生成，不通过HTTP Set-Cookie，
+        因此直接在本地生成，无需依赖网络请求。
+        """
+        import uuid
+        import time
+        import random
+
+        _uid = str(uuid.uuid4()).upper()
+        _ts = str(int(time.time() * 1000))
+
+        cookies = {
+            "buvid3": _uid + "infoc",
+            "buvid4": str(uuid.uuid4()).upper(),
+            "b_nut": _ts,
+            "_uuid": uuid.uuid4().hex.upper()[:32],
+            "rpdid": "|" + "|".join(
+                hex(random.randint(0, 0xFFFFFFFF))[2:].zfill(8) for _ in range(5)
+            ),
+            "buvid_fp": str(random.randint(1000000000000, 9999999999999)),
+            "b_lsid": str(random.randint(1000000000000, 9999999999999)) + "_" + _ts,
+            "enable_web_push": "DISABLE",
+            "header_theme_version": "CLOSE",
+            "home_feed_column": "5",
+            "browser_resolution": "1920x1080",
+            "CURRENT_FNVAL": "4048",
+            "CURRENT_QUALITY": "112",
+            "bp_t_offset_": "",
+        }
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        return cookie_str
+
+    @staticmethod
+    def _refresh_session_cookies() -> str:
+        """
+        尝试通过HTTP获取B站可能下发的少数Set-Cookie，
+        成功则与本地生成的Cookie合并返回；
+        失败则完全使用本地生成的Cookie（全自动，不阻塞）。
+        """
+        local_cookies = LiveBili._generate_default_cookies()
+        local_dict = {}
+        for part in local_cookies.split("; "):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                local_dict[k] = v
+
+        try:
+            session = requests.Session()
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/92.0.4515.159 Safari/537.36"
+                ),
+                "Referer": "https://www.bilibili.com/",
+            })
+
+            http_count = 0
+            try:
+                session.get("https://api.bilibili.com/x/frontend/finger/spi", timeout=8)
+            except Exception:
+                pass
+            try:
+                session.get("https://www.bilibili.com/", timeout=8, allow_redirects=True)
+            except Exception:
+                pass
+
+            for ck, cv in session.cookies.items():
+                if cv:
+                    local_dict[ck] = cv
+                    http_count += 1
+
+            merged = "; ".join(f"{k}={v}" for k, v in local_dict.items())
+            if http_count > 0:
+                bili_log(
+                    f"B站Cookie已就绪: 本地生成{len(local_dict) - http_count}个 + HTTP获取{http_count}个",
+                    LogLevel.WARN, console_only=True,
+                )
+            else:
+                bili_log(
+                    f"B站Cookie已就绪: 全部本地生成（{len(local_dict)}个字段）",
+                    LogLevel.WARN, console_only=True,
+                )
+            return merged
+        except Exception:
+            bili_log(
+                f"B站Cookie已就绪: 全部本地生成（{len(local_dict)}个字段，HTTP获取失败）",
+                LogLevel.WARN, console_only=True,
+            )
+            return local_cookies
+
+    @classmethod
+    def _get_cookie(cls) -> str:
+        """
+        全自动获取B站 Cookie：
+        本地动态生成设备指纹 + 尝试HTTP补充 → 始终有可用Cookie，永不返回空。
+        """
+        fresh = cls._refresh_session_cookies()
+        if fresh:
+            try:
+                from core.config import ConfigManager
+                ConfigManager().update_bilibili_cookie(fresh)
+                bili_log("已自动刷新并保存B站Cookie到配置文件", LogLevel.WARN, console_only=True)
+            except Exception:
+                pass
+            return fresh
+
+        # 网络完全不可用时的最终兜底
+        fallback = cls._generate_default_cookies()
+        bili_log("使用本地生成B站Cookie（网络不可用）", LogLevel.WARN, console_only=True)
+        return fallback
+
     def _get_stream_url(self, params: dict) -> str:
         """
         从 getRoomPlayInfo 响应中提取拼接流URL
         """
         url = f"{self.API_BASE}/xlive/web-room/v2/index/getRoomPlayInfo"
         try:
-            resp = requests.get(url, params=params, timeout=10)
+            cookie = self._get_cookie()
+            headers = {"Cookie": cookie} if cookie else {}
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
             if resp.status_code != 200 or not resp.text:
                 return ""
 
@@ -92,9 +210,13 @@ class LiveBili:
         info.room_id = self.room_id
 
         try:
+            # 获取 Cookie（供后续请求使用）
+            cookie = self._get_cookie()
+            headers = {"Cookie": cookie} if cookie else {}
+
             # ---- 第1步: room_init 获取房间初始化信息 ----
             room_init_url = f"{self.API_BASE}/room/v1/Room/room_init"
-            resp = requests.get(room_init_url, params={"id": self.room_id}, timeout=10)
+            resp = requests.get(room_init_url, params={"id": self.room_id}, headers=headers, timeout=10)
 
             if resp.status_code != 200 or not resp.text:
                 info.status = LiveStreamStatus.Error
@@ -170,7 +292,9 @@ class LiveBili:
         url = f"{self.API_BASE}/room/v1/Room/get_info"
         params = {"room_id": self.real_room_id}
         try:
-            resp = requests.get(url, params=params, timeout=10)
+            cookie = self._get_cookie()
+            headers = {"Cookie": cookie} if cookie else {}
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
             resp.raise_for_status()
             result = resp.json()
             if result.get("code") == 0:
@@ -203,8 +327,8 @@ class LiveDouyin:
 
     BASE_URL = "https://live.douyin.com"
 
-    # 硬编码的 Cookie（包含完整认证令牌，绕过反爬签名校验）
-    _HARDCODED_COOKIE = (
+    # 硬编码的默认 Cookie（兜底，仅在所有其他来源都失败时使用）
+    _DEFAULT_COOKIE = (
         "enter_pc_once=1; "
         "UIFID_TEMP=29a1f63ec682dc0a0df227dd163e2b46e3a6390e403335fa4c2c6d1dc0ec5ffa7a288170e8828ecb8b2f0f16b3219daa18ad5d7faf7fb5fbb64df454c3b471cc1db9c0b5eb2cbc8e0cb1e690f5c1fbd6; "
         "stream_recommend_feed_params=%22%7B%5C%22cookie_enabled%5C%22%3Atrue%2C%5C%22screen_width%5C%22%3A2560%2C%5C%22screen_height%5C%22%3A1440%2C%5C%22browser_online%5C%22%3Atrue%2C%5C%22cpu_core_num%5C%22%3A16%2C%5C%22device_memory%5C%22%3A8%2C%5C%22downlink%5C%22%3A10%2C%5C%22effective_type%5C%22%3A%5C%224g%5C%22%2C%5C%22round_trip_time%5C%22%3A50%7D%22; "
@@ -245,6 +369,84 @@ class LiveDouyin:
 
     def __init__(self, room_id: str):
         self.room_id = room_id
+
+    @staticmethod
+    def _refresh_session_cookies() -> str:
+        """
+        通过访问抖音首页获取新鲜 Session Cookie（ttwid 等）。
+        返回从 Set-Cookie 头提取的 Cookie 字符串，失败返回 ""。
+        """
+        try:
+            session = requests.Session()
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/92.0.4515.159 Safari/537.36"
+                ),
+            })
+            resp = session.get("https://live.douyin.com/", timeout=10, allow_redirects=True)
+            # 从 Set-Cookie 中提取关键 cookie 值
+            extracted = {}
+            for r in resp.history + [resp]:
+                for cookie_name, cookie_val in session.cookies.items():
+                    extracted[cookie_name] = cookie_val
+
+            if not extracted:
+                douyin_log("自动刷新Cookie：未收到任何 Set-Cookie", LogLevel.WARN, console_only=True)
+                return ""
+
+            # 组装成 key=value; key=value... 字符串
+            cookie_str = "; ".join(f"{k}={v}" for k, v in extracted.items())
+            douyin_log(f"自动刷新Cookie成功，获取到 {len(extracted)} 个字段: {cookie_str[:200]}...", LogLevel.WARN, console_only=True)
+            return cookie_str
+        except Exception as e:
+            douyin_log(f"自动刷新Cookie失败: {e}", LogLevel.WARN, console_only=True)
+            return ""
+
+    @classmethod
+    def _get_cookie(cls) -> str:
+        """
+        获取抖音 Cookie，按优先级：
+        1. 自动刷新（访问 live.douyin.com 获取新鲜 ttwid）→ 成功则保存并返回
+        2. config.json 中上次自动刷新保存的 douyin_cookie（网络异常等降级）
+        3. 内置默认 Cookie（最终兜底）
+        """
+        # 1. 优先自动刷新（始终尝试获取最新 Cookie）
+        fresh = cls._refresh_session_cookies()
+        if fresh:
+            # 合并默认 Cookie 中的非 session 字段（设备指纹等长期有效字段）
+            default_parts = re.split(r';\s*', cls._DEFAULT_COOKIE)
+            fresh_keys = set(p.split('=', 1)[0] for p in re.split(r';\s*', fresh) if '=' in p)
+            merged_parts = []
+            for part in default_parts:
+                if '=' in part:
+                    key = part.split('=', 1)[0]
+                    if key not in fresh_keys:
+                        merged_parts.append(part)
+            merged = fresh + "; " + "; ".join(merged_parts)
+
+            try:
+                from core.config import ConfigManager
+                ConfigManager().update_douyin_cookie(merged)
+                douyin_log("已自动刷新并保存Cookie到配置文件", LogLevel.WARN, console_only=True)
+            except Exception:
+                pass
+            return merged
+
+        # 2. 自动刷新失败，尝试读取上次保存的配置（网络异常时可作为降级）
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager().config
+            if cfg.douyin_cookie and cfg.douyin_cookie.strip():
+                douyin_log("自动刷新失败，使用配置中上次保存的Cookie", LogLevel.WARN, console_only=True)
+                return cfg.douyin_cookie
+        except Exception:
+            pass
+
+        # 3. 兜底：使用内置默认 Cookie
+        douyin_log("使用内置默认Cookie（最终兜底）", LogLevel.WARN, console_only=True)
+        return cls._DEFAULT_COOKIE
 
     def _get_stream_link_from_response(self, data: dict) -> str:
         """
@@ -300,7 +502,7 @@ class LiveDouyin:
             headers = {
                 "User-Agent": user_agent,
                 "Referer": "https://live.douyin.com/",
-                "Cookie": self._HARDCODED_COOKIE,
+                "Cookie": self._get_cookie(),
             }
 
             params = {
