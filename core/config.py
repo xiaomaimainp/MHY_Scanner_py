@@ -44,6 +44,11 @@ def get_settings_file_path() -> Path:
     return get_base_dir() / "Config" / "config.json"
 
 
+def get_cookie_file_path() -> Path:
+    """获取 Cookie 配置文件路径：./Config/cookie.json"""
+    return get_base_dir() / "Config" / "cookie.json"
+
+
 # ---- 类型映射：C++ type 字符串 <-> (server_type, game_type) ----
 # C++ type 字段只有两个值:
 #   "官服"     -> server_type=1, game_type=4 (默认原神)
@@ -120,6 +125,8 @@ class AppConfig:
     last_platform: int = 0  # 0=抖音, 1=BiliBili
     last_room_id_douyin: str = ""
     last_room_id_bilibili: str = ""
+    douyin_cookie: str = ""        # 抖音直播 Cookie 字符串（空=使用内置默认/自动刷新）
+    bilibili_cookie: str = ""     # B站直播 Cookie 字符串（空=使用自动刷新）
     default_account_uid: str = ""
     default_account_server_type: int = 1
     log_output_mode: str = "console" if not getattr(sys, 'frozen', False) else "file"  # "console" / "file"
@@ -196,6 +203,8 @@ class AppConfig:
             last_platform=data.get("last_platform", 0),
             last_room_id_douyin=last_room_douyin,
             last_room_id_bilibili=last_room_bili,
+            douyin_cookie=data.get("douyin_cookie", ""),
+            bilibili_cookie=data.get("bilibili_cookie", ""),
             default_account_uid=default_uid,
             default_account_server_type=default_server,
             log_output_mode=data.get("log_output_mode", "console" if not getattr(sys, 'frozen', False) else "file"),
@@ -230,7 +239,7 @@ class AppConfig:
     def to_settings_dict(self) -> dict:
         """
         导出应用设置，写入 config.json。
-        不含账号列表。
+        不含账号列表和 Cookie（Cookie 独立存储在 cookie.json）。
         """
         return {
             "auto_exit": self.auto_exit,
@@ -273,9 +282,11 @@ class ConfigManager:
         self._initialized = True
         self._accounts_file = get_accounts_file_path()
         self._settings_file = get_settings_file_path()
+        self._cookie_file = get_cookie_file_path()
         self._config: AppConfig = self._load_config()
         config_log(f"账号配置文件: {self._accounts_file}")
         config_log(f"设置配置文件: {self._settings_file}")
+        config_log(f"Cookie 配置文件: {self._cookie_file}")
 
         # 首次运行时自动创建 Config 目录和 config.json（默认值）
         if not self._settings_file.exists():
@@ -313,7 +324,45 @@ class ConfigManager:
             # 旧版 userinfo.json 可能包含 auto_exit / log_output_mode 等字段，自动作为 settings 使用
             pass  # merged 已包含 accounts_data 全部字段
 
-        return AppConfig.from_dict(merged)
+        config = AppConfig.from_dict(merged)
+
+        # 4. 从 cookie.json 加载 Cookie（独立文件）
+        self._load_cookie(config)
+        # 旧版兼容：cookie.json 不存在时，从 config.json 顺带加载（首次迁移）
+        if not self._cookie_file.exists():
+            douyin_from_settings = settings_data.get("douyin_cookie", "")
+            bili_from_settings = settings_data.get("bilibili_cookie", "")
+            if douyin_from_settings or bili_from_settings:
+                config.douyin_cookie = douyin_from_settings
+                config.bilibili_cookie = bili_from_settings
+
+        return config
+
+    def _load_cookie(self, config: AppConfig = None):
+        """从 cookie.json 读取 Cookie 并写入 AppConfig"""
+        if config is None:
+            config = self._config
+        if self._cookie_file.exists():
+            try:
+                with open(self._cookie_file, 'r', encoding='utf-8') as f:
+                    cookie_data = json.load(f)
+                config.douyin_cookie = cookie_data.get("douyin_cookie", "")
+                config.bilibili_cookie = cookie_data.get("bilibili_cookie", "")
+            except Exception as e:
+                error(f"加载 Cookie 文件失败: {e}\n{traceback.format_exc()}")
+
+    def _save_cookie(self):
+        """将 Cookie 保存到 cookie.json"""
+        try:
+            self._cookie_file.parent.mkdir(parents=True, exist_ok=True)
+            cookie_data = {
+                "douyin_cookie": self._config.douyin_cookie,
+                "bilibili_cookie": self._config.bilibili_cookie,
+            }
+            with open(self._cookie_file, 'w', encoding='utf-8') as f:
+                json.dump(cookie_data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            error(f"保存 Cookie 文件失败: {e}\n{traceback.format_exc()}")
 
     def reload(self):
         """重新从文件加载配置（用于文件被外部修改后刷新）"""
@@ -321,7 +370,7 @@ class ConfigManager:
         config_log(f"配置已重新加载: accounts={len(self._config.accounts)}")
 
     def save_config(self):
-        """保存全部配置：账号写入 userinfo.json，设置写入 config.json"""
+        """保存全部配置：账号写入 userinfo.json，设置写入 config.json，Cookie 写入 cookie.json"""
         try:
             # 保存账号数据 → userinfo.json
             self._accounts_file.parent.mkdir(parents=True, exist_ok=True)
@@ -334,6 +383,9 @@ class ConfigManager:
             settings_dict = self._config.to_settings_dict()
             with open(self._settings_file, 'w', encoding='utf-8') as f:
                 json.dump(settings_dict, f, ensure_ascii=False, indent=4)
+
+            # 保存 Cookie → cookie.json
+            self._save_cookie()
         except Exception as e:
             error(f"保存配置失败: {e}\n{traceback.format_exc()}")
 
@@ -360,6 +412,14 @@ class ConfigManager:
         return self._config
 
     # ---- 便捷更新方法 ----
+
+    def update_douyin_cookie(self, value: str):
+        self._config.douyin_cookie = value
+        self._save_cookie()
+
+    def update_bilibili_cookie(self, value: str):
+        self._config.bilibili_cookie = value
+        self._save_cookie()
 
     def update_auto_exit(self, value: bool):
         self._config.auto_exit = value

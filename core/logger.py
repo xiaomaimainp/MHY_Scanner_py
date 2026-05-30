@@ -160,7 +160,7 @@ class Logger:
     # ---- 核心输出 ----
 
     @classmethod
-    def _log(cls, level: str, tag: str, msg: str):
+    def _log(cls, level: str, tag: str, msg: str, console_only: bool = False):
         if not cls._enabled:
             return
         # 级别过滤：低于当前阈值的日志不输出
@@ -170,6 +170,11 @@ class Logger:
         timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         tag_part = f"[{tag}]" if tag != level else ""
         line = f"[{timestamp}][{level}]{tag_part} {msg}"
+
+        if console_only:
+            # 仅控制台输出，不写入文件
+            print(line, flush=True)
+            return
 
         # 控制台输出
         if cls._output_mode == OutputMode.CONSOLE:
@@ -231,8 +236,8 @@ class Logger:
         cls._log(LogLevel.to_name(level), "Polling", msg)
 
     @classmethod
-    def bilibili(cls, msg: str, level: int = LogLevel.INFO):
-        cls._log(LogLevel.to_name(level), "BiliBili", msg)
+    def bilibili(cls, msg: str, level: int = LogLevel.INFO, console_only: bool = False):
+        cls._log(LogLevel.to_name(level), "BiliBili", msg, console_only=console_only)
 
     @classmethod
     def main(cls, msg: str, level: int = LogLevel.INFO):
@@ -252,8 +257,8 @@ class Logger:
         cls._log(LogLevel.to_name(level), "Update", msg)
 
     @classmethod
-    def douyin(cls, msg: str, level: int = LogLevel.INFO):
-        cls._log(LogLevel.to_name(level), "DouyinLive", msg)
+    def douyin(cls, msg: str, level: int = LogLevel.INFO, console_only: bool = False):
+        cls._log(LogLevel.to_name(level), "DouyinLive", msg, console_only=console_only)
 
     @classmethod
     def bili_sdk(cls, msg: str, level: int = LogLevel.INFO):
@@ -278,8 +283,8 @@ def api_log(msg: str, level: int = LogLevel.INFO):
 def poll_log(msg: str, level: int = LogLevel.INFO):
     Logger.polling(msg, level)
 
-def bili_log(msg: str, level: int = LogLevel.INFO):
-    Logger.bilibili(msg, level)
+def bili_log(msg: str, level: int = LogLevel.INFO, console_only: bool = False):
+    Logger.bilibili(msg, level, console_only=console_only)
 
 def main_log(msg: str, level: int = LogLevel.INFO):
     Logger.main(msg, level)
@@ -293,8 +298,8 @@ def config_log(msg: str, level: int = LogLevel.INFO):
 def update_log(msg: str, level: int = LogLevel.INFO):
     Logger.update(msg, level)
 
-def douyin_log(msg: str, level: int = LogLevel.INFO):
-    Logger.douyin(msg, level)
+def douyin_log(msg: str, level: int = LogLevel.INFO, console_only: bool = False):
+    Logger.douyin(msg, level, console_only=console_only)
 
 def bsgsdk_log(msg: str, level: int = LogLevel.INFO):
     Logger.bili_sdk(msg, level)
