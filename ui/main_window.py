@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QRegularExpression, QModelIndex, QThread, QObject, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QIcon, QCursor, QRegularExpressionValidator, QBrush, QColor, QPixmap, QPainter, QPen
 
-from scanner import ScreenScanner, StreamScanner, LivePlatform, get_live_info, LiveStreamStatus
+from scanner import ScreenScanner, StreamScanner, LivePlatform, get_live_info, LiveStreamStatus, LiveDouyin, LiveBili
 from .account_manager import AccountManager
 from core.config import ConfigManager, Account, get_base_dir
 from .config_editor import ConfigEditor
@@ -264,9 +264,30 @@ class MainWindow(QMainWindow):
         # 加载账号
         self.load_accounts()
         
+        # 启动时后台自动获取抖音 Cookie
+        threading.Thread(target=self._auto_refresh_douyin_cookie, daemon=True).start()
+        # 启动时后台自动获取B站 Cookie
+        threading.Thread(target=self._auto_refresh_bilibili_cookie, daemon=True).start()
+        
         # 自动开始检查
         if self.config.config.auto_start:
             QTimer.singleShot(500, self.start_screen_scan)
+
+    @staticmethod
+    def _auto_refresh_douyin_cookie():
+        """启动时后台自动获取抖音 Cookie"""
+        try:
+            LiveDouyin._get_cookie()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _auto_refresh_bilibili_cookie():
+        """启动时后台自动获取B站 Cookie"""
+        try:
+            LiveBili._get_cookie()
+        except Exception:
+            pass
     
     def init_ui(self):
         """初始化UI"""
@@ -585,8 +606,10 @@ class MainWindow(QMainWindow):
         """平台改变"""
         platform = self.platform_combo.currentIndex()
         self.config.update_last_platform(platform)
-        # 加载对应平台的直播间ID
+        # 加载对应平台的直播间ID（阻断信号，避免触发 textChanged → 回写导致覆盖）
+        self.room_id_edit.blockSignals(True)
         self.room_id_edit.setText(self.config.config.get_last_room_id(platform))
+        self.room_id_edit.blockSignals(False)
     
     @pyqtSlot(str)
     def on_room_id_changed(self, room_id: str):
@@ -899,11 +922,11 @@ class MainWindow(QMainWindow):
             self.api.set_server_type(ServerType(self.selected_account.server_type))
             self.api.set_game_type(GameType(self.selected_account.game_type))
             main_log(f"选中账号: {self.selected_account.name}, uid={uid}, server={server_type}, game={self.selected_account.game_type}")
-            # 填充该账号上次使用的直播间ID，如果没有则清空显示占位符
+            # 填充该账号上次使用的直播间ID，没有则保留当前平台已设置的ID（避免清空覆盖）
             if self.selected_account.last_room_id:
+                self.room_id_edit.blockSignals(True)
                 self.room_id_edit.setText(self.selected_account.last_room_id)
-            else:
-                self.room_id_edit.clear()
+                self.room_id_edit.blockSignals(False)
         
         # 更新菜单栏"默认账号"按钮文字
         self._update_default_action_text()
@@ -1245,7 +1268,7 @@ class MainWindow(QMainWindow):
         
         result = self.api.bh3_qrcode_confirm(ticket, uid, token, name)
         
-        bili_log(f"B站登录结果: ticket={ticket[:12]}..., uid={uid}, result={result.name}", LogLevel.DEBUG)
+        bili_log(f"B站登录结果: ticket={ticket[:12]}..., uid={uid}, result={result.name}", LogLevel.DEBUG, console_only=True)
         if result == ScanRet.SUCCESS:
             gui_log("扫码登录成功！")
             QMessageBox.information(self, "登录成功", "扫码登录成功！")
