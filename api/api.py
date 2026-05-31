@@ -112,6 +112,9 @@ BH3_QRCODE_SCAN = f"{BH3_BASE}/combo/panda/qrcode/scan"
 BH3_QRCODE_CONFIRM = f"{BH3_BASE}/combo/panda/qrcode/confirm"
 BH3_QRCODE_QUERY = f"{BH3_BASE}/combo/panda/qrcode/query"
 
+# BH3 Bilibili OA 调度信息（对齐 C++ GetOAString）
+BH3_BILIBILI_OA_URL = "https://api.v6qbb.cloud/get_bh3_bilibili_oa"
+
 # ── 原神 (app_id=4) / 未定事件簿 (app_id=2) — 自生成二维码 ────
 # 端点: hk4e-sdk.mihoyo.com/hk4e_cn/combo/panda/...
 # 用于程序自己生成二维码的 fetch + query 流程
@@ -156,6 +159,15 @@ MULTI_TOKEN = f"{TAKUMI_BASE}/auth/api/getMultiTokenByLoginTicket"
 PASSPORT_BASE = "https://passport-api.mihoyo.com"
 SMS_CREATE = f"{PASSPORT_BASE}/account/ma-cn-verifier/verifier/createLoginCaptcha"
 SMS_LOGIN = f"{PASSPORT_BASE}/account/ma-cn-passport/app/loginByMobileCaptcha"
+
+# ── hoyolab / 米游社 扫码登录（新 passport API） ──────────────
+# 端点: passport-api.miyoushe.com
+# 确认登录后通过响应 Set-Cookie 直接返回 ltoken_v2/cookie_token，
+# 无需 login_ticket → stoken 的额外转换步骤
+PASSPORT_MIYOUSHE = "https://passport-api.miyoushe.com"
+HOYOLAB_QR_CREATE = f"{PASSPORT_MIYOUSHE}/account/ma-cn-passport/web/createQRLogin"
+HOYOLAB_QR_QUERY = f"{PASSPORT_MIYOUSHE}/account/ma-cn-passport/web/queryQRLoginStatus"
+HOYOLAB_APP_ID = "bll8iq97cem8"  # x-rpc-app_id 固定值
 
 # RSA 公钥拉取 URL（尝试多个已知端点）
 RSA_KEY_URLS = [
@@ -337,7 +349,7 @@ class MhyApi:
         """设置服务器类型"""
         self.server_type = server_type
     
-    def fetch_qrcode_url(self) -> Tuple[str, str]:
+    def fetch_qrcode_url(self, game_type: Optional[GameType] = None) -> Tuple[str, str]:
         """
         获取二维码URL（对齐 C++ GetLoginQrcodeUrl — 仅 Content-Type 头，无状态请求）
         Returns: (qrcode_url, ticket)
@@ -345,10 +357,15 @@ class MhyApi:
         ticket 提取策略：
         - 对齐 C++: ticket = URL 末尾 24 字符
           C++ WindowLogin.cpp: string_view ticket(str.data() + str.size() - 24, 24);
+
+        app_id 选择策略：
+        - 自生成二维码（默认）: app_id=2 (TearsOfThemis)，hk4e-sdk WAF 最宽松
+          app_id=1/4 在 ~5 次 query 轮询后触发 -3503 WAF → 二维码误判为过期
+        - 游戏内扫码: 传入 game_type 参数使用对应 app_id (1/4/8/12)
         """
-        # 对齐 C++: app_id = static_cast<int>(loginType) = GameType::TearsOfThemis = 2
-        # app_id=1/4 均在 ~5 次 query 后触发 -3503；仅 app_id=2 WAF 阈值足够宽松
-        app_id = 2
+        if game_type is None:
+            game_type = GameType.TearsOfThemis  # app_id=2, WAF 最宽松
+        app_id = int(game_type)
         data = {
             "app_id": app_id,
             "device": self.device_id
@@ -381,16 +398,18 @@ class MhyApi:
             qr_log(f"请求异常: {e}", LogLevel.ERROR)
             return "", ""
     
-    def query_qrcode_state(self, ticket: str, biz_key: str = "") -> Tuple[LoginQRCodeState, str, str]:
+    def query_qrcode_state(self, ticket: str, biz_key: str = "", game_type: Optional[GameType] = None) -> Tuple[LoginQRCodeState, str, str]:
         """
         查询二维码状态（用于程序自己生成的二维码）
         Returns: (state, uid, token)
-        
-        与 fetch 的 app_id 保持一致。
+
+        app_id 选择策略（与 fetch_qrcode_url 保持一致）：
+        - 自生成二维码（默认）: app_id=2 (TearsOfThemis)，WAF 最宽松
+        - 游戏内扫码: 传入 game_type 参数使用对应 app_id
         """
-        # 对齐 C++: app_id = static_cast<int>(loginType) = GameType::TearsOfThemis = 2
-        # app_id=1/4 均在 ~5 次 query 后触发 -3503；仅 app_id=2 WAF 阈值足够宽松
-        app_id = 2
+        if game_type is None:
+            game_type = GameType.TearsOfThemis  # app_id=2, WAF 最宽松
+        app_id = int(game_type)
         return self._query_qrcode_state_impl(ticket, app_id, QRCODE_QUERY, biz_key)
 
     def query_game_qrcode_state(self, ticket: str, app_id: int, biz_key: str = "") -> Tuple[LoginQRCodeState, str, str]:
@@ -544,9 +563,27 @@ class MhyApi:
             qr_log(f"扫码确认异常: {e}", LogLevel.ERROR)
             return False
     
-    def confirm_qrcode(self, ticket: str, uid: str, token: str, app_id: int = 1, biz_key: str = "") -> bool:
-        """确认登录"""
-        # 根据 app_id 选择正确的 API URL
+    def confirm_qrcode(self, ticket: str, uid: str, token: str, app_id: int = 1, biz_key: str = "", url: str = "") -> bool:
+        """
+        确认登录（对齐 C++ ConfirmQRLogin / scanConfirm）
+
+        对齐 DSVVA C++ ConfirmQRLogin:
+        - 非 BH3 游戏: POST 到 url 参数指定的地址（若 url 为空则自动选择 API 端点）
+        - BH3 Bilibili 服 (server_type=BiliBili): 使用 scanConfirm 流程（Combo proto + OA）
+        - 请求体包含 Account proto 嵌套 payload: {uid, token}
+        """
+        game_type = app_id  # 对齐 C++: static_cast<int>(gameType)
+
+        # ── BH3 Bilibili 服特殊流程 ──
+        if game_type == int(GameType.Honkai3) and self.server_type == ServerType.BiliBili:
+            # 传入的 token 在 BH3 B服场景下是 access_key
+            return self._scan_confirm_bh3(ticket, uid, token, "")
+
+        # ── URL 直发模式（对齐 DSVVA ConfirmQRLogin POST 到二维码 URL） ──
+        if url:
+            return self._confirm_qrcode_by_url(url, ticket, uid, token, game_type)
+
+        # ── 自动选择 API 端点 ──
         if app_id == 1:  # 崩坏3
             api_url = BH3_QRCODE_CONFIRM
         elif app_id == 4:  # 原神 - 游戏内二维码使用 api-sdk 域名
@@ -586,13 +623,359 @@ class MhyApi:
             qr_log(f"确认登录异常: {e}", LogLevel.ERROR)
             return False
     
+    def _confirm_qrcode_by_url(self, url: str, ticket: str, uid: str, game_token: str, app_id: int) -> bool:
+        """
+        URL 直发确认登录（对齐 DSVVA C++ ConfirmQRLogin）
+
+        与 confirm_qrcode 的区别：
+        - 直接 POST 到二维码 URL 本身（而非 API 端点）
+        - DSVVA 从屏幕截取二维码后，提取 URL 并用此方法确认
+        - 请求体与 confirm_qrcode 相同（Account proto）
+        """
+        data = {
+            "app_id": app_id,
+            "device": self.device_id,
+            "ticket": ticket,
+            "payload": {
+                "proto": "Account",
+                "raw": json.dumps({"uid": uid, "token": game_token})
+            }
+        }
+        headers = {"Content-Type": "application/json"}
+
+        qr_log(f"[confirm_by_url] URL={url[:80]}...", LogLevel.DEBUG)
+        qr_log(f"[confirm_by_url] data={data}", LogLevel.DEBUG)
+
+        try:
+            resp = _safe_post(url, json_data=data, headers=headers)
+            result = resp.json()
+            qr_log(f"[confirm_by_url] response: {result}", LogLevel.DEBUG)
+            return result.get("retcode", -1) == 0
+        except Exception as e:
+            qr_log(f"[confirm_by_url] 异常: {e}", LogLevel.ERROR)
+            return False
+
+    def _get_bh3_oa_string(self) -> str:
+        """
+        获取崩坏3 Bilibili 服 OA 调度信息（对齐 C++ GetOAString）
+
+        C++ 实现:
+          static std::string value = []() {
+              auto res = cpr::Get(cpr::Url{"https://api.v6qbb.cloud/get_bh3_bilibili_oa"});
+              return res.text;
+          }();
+        """
+        try:
+            import requests as req
+            resp = req.get(BH3_BILIBILI_OA_URL, timeout=10)
+            if resp.text.strip():
+                qr_log(f"[bh3_oa] 获取成功: {resp.text[:80]}...", LogLevel.DEBUG)
+                return resp.text.strip()
+        except Exception as e:
+            qr_log(f"[bh3_oa] 获取失败: {e}", LogLevel.WARN)
+        return ""
+
+    def get_bh3_external_login_info(self, uid: str, access_key: str) -> Tuple[int, str, str, str]:
+        """
+        获取崩坏3 Bilibili 服外部登录信息（对齐 C++ GetBH3ExternalLoginInfo）
+
+        POST https://api-sdk.mihoyo.com/bh3_cn/combo/granter/login/v2/login
+        Returns: (retcode, open_id, combo_token, combo_id)
+        """
+        import requests as req
+
+        body_data = json.dumps({"access_key": access_key, "uid": int(uid)})
+        body = {
+            "device": "0000000000000000",
+            "app_id": 1,
+            "channel_id": 14,
+            "data": body_data
+        }
+        # C++ 会调用 makeSign(body) 生成 HMAC-SHA256 签名
+        # 对齐 C++ 的固定密钥
+        body["sign"] = hmac_sha256(
+            "0ebc517adb1b62c6b408df153331f9aa",
+            body_data
+        )
+
+        headers = {"Content-Type": "application/json"}
+
+        qr_log(f"[bh3_external_login] uid={uid}", LogLevel.DEBUG)
+        qr_log(f"[bh3_external_login] body={body}", LogLevel.DEBUG)
+
+        try:
+            resp = req.post(BH3_V2_LOGIN, json=body, headers=headers, timeout=10)
+            result = resp.json()
+            qr_log(f"[bh3_external_login] response: {result}", LogLevel.DEBUG)
+
+            retcode = result.get("retcode", -1)
+            if retcode != 0:
+                return retcode, "", "", ""
+
+            open_id = result["data"]["open_id"]
+            combo_token = result["data"]["combo_token"]
+            combo_id = result["data"]["combo_id"]
+            return 0, open_id, combo_token, combo_id
+        except Exception as e:
+            qr_log(f"[bh3_external_login] 异常: {e}", LogLevel.ERROR)
+            return -1, "", "", ""
+
+    def _bh3_scan_check(self, ticket: str) -> bool:
+        """
+        崩坏3 扫码校验（对齐 C++ scanCheck）
+
+        POST https://api-sdk.mihoyo.com/bh3_cn/combo/panda/qrcode/scan
+        """
+        import requests as req
+
+        data = {
+            "app_id": "1",
+            "device": "0000000000000000",
+            "ticket": ticket,
+            "ts": int(time.time())
+        }
+
+        headers = {"Content-Type": "application/json"}
+        qr_log(f"[bh3_scan_check] ticket={ticket[:12]}...", LogLevel.DEBUG)
+
+        try:
+            resp = req.post(BH3_QRCODE_SCAN, json=data, headers=headers, timeout=10)
+            result = resp.json()
+            qr_log(f"[bh3_scan_check] response: {result}", LogLevel.DEBUG)
+            return result.get("retcode", -1) == 0
+        except Exception as e:
+            qr_log(f"[bh3_scan_check] 异常: {e}", LogLevel.ERROR)
+            return False
+
+    def _scan_confirm_bh3(self, ticket: str, uid: str, access_key: str, name: str = "") -> bool:
+        """
+        崩坏3 Bilibili 服扫码确认登录（对齐 C++ scanConfirm）
+
+        流程:
+        1. GetBH3ExternalLoginInfo(uid, access_key) → open_id, combo_token, combo_id
+        2. 构建 Combo proto 的 raw + ext payload
+        3. POST BH3_QRCODE_CONFIRM
+
+        C++ scanConfirm 使用 Combo proto（而非 Account proto）
+        """
+        retcode, open_id, combo_token, combo_id = self.get_bh3_external_login_info(uid, access_key)
+        if retcode != 0:
+            qr_log(f"[bh3_scan_confirm] GetBH3ExternalLoginInfo 失败 retcode={retcode}", LogLevel.WARN)
+            return False
+
+        # 构建 raw payload（Combo proto）
+        raw_data = {
+            "heartbeat": False,
+            "open_id": open_id,
+            "device_id": "0000000000000000",
+            "app_id": "1",
+            "channel_id": "14",
+            "combo_token": combo_token,
+            "asterisk_name": name,
+            "combo_id": combo_id,
+            "account_type": "2"
+        }
+
+        # 获取 OA 调度字符串
+        oa_string = self._get_bh3_oa_string()
+
+        # 构建 ext payload
+        ext_data = {
+            "data": {
+                "accountType": "2",
+                "accountID": "",
+                "c": open_id,
+                "accountToken": combo_token,
+                "dispatch": oa_string
+            }
+        }
+
+        post_body = {
+            "device": "0000000000000000",
+            "app_id": 1,
+            "ts": int(time.time()),
+            "ticket": ticket,
+            "payload": {
+                "proto": "Combo",
+                "raw": json.dumps(raw_data),
+                "ext": json.dumps(ext_data)
+            }
+        }
+
+        headers = {"Content-Type": "application/json"}
+        qr_log(f"[bh3_scan_confirm] post_body={json.dumps(post_body, ensure_ascii=False)[:300]}...", LogLevel.DEBUG)
+
+        try:
+            import requests as req
+            resp = req.post(BH3_QRCODE_CONFIRM, json=post_body, headers=headers, timeout=10)
+            result = resp.json()
+            qr_log(f"[bh3_scan_confirm] response: {result}", LogLevel.DEBUG)
+            return result.get("retcode", -1) == 0
+        except Exception as e:
+            qr_log(f"[bh3_scan_confirm] 异常: {e}", LogLevel.ERROR)
+            return False
+    
+    # ═══════════════════════════════════════════════════════════════
+    # hoyolab / 米游社 扫码登录（新 passport API）
+    # ═══════════════════════════════════════════════════════════════
+    # 与旧 hk4e-sdk API 的核心区别：
+    #   1. 端点变为 passport-api.miyoushe.com
+    #   2. 状态名: Created (未扫) / Scanned (已扫) / Confirmed (确认)
+    #   3. Confirmed 时 token 通过响应 Set-Cookie 头直接返回 (ltoken_v2/cookie_token)
+    #   4. 无需额外 login_ticket → stoken 转换步骤
+    
+    def _hoyolab_headers(self) -> Dict[str, str]:
+        """hoyolab QR 登录专用请求头"""
+        return {
+            "Content-Type": "application/json",
+            "x-rpc-app_id": HOYOLAB_APP_ID,
+            "x-rpc-device_id": self.device_id,
+        }
+    
+    def fetch_hoyolab_qrcode(self) -> Tuple[str, str]:
+        """获取 hoyolab 扫码登录二维码（新 passport API）
+
+        POST https://passport-api.miyoushe.com/account/ma-cn-passport/web/createQRLogin
+
+        Returns: (qrcode_url, ticket)
+        - qrcode_url: 用于生成二维码图片的 URL
+        - ticket: UUID 格式，用于后续轮询查询状态
+        """
+        headers = self._hoyolab_headers()
+
+        try:
+            resp = _safe_post(HOYOLAB_QR_CREATE, json_data={}, headers=headers)
+            result = resp.json()
+            qr_log(f"[hoyolab_qr_create] response: {result}", LogLevel.DEBUG)
+
+            if result.get("retcode", -1) == 0:
+                url = result["data"]["url"]
+                ticket = result["data"]["ticket"]
+                qr_log(f"[hoyolab_qr_create] success! ticket={ticket[:16]}...", LogLevel.DEBUG)
+                return url, ticket
+            else:
+                qr_log(f"[hoyolab_qr_create] failed retcode={result.get('retcode')}: {result.get('message')}", LogLevel.WARN)
+                return "", ""
+        except Exception as e:
+            qr_log(f"[hoyolab_qr_create] 异常: {e}", LogLevel.ERROR)
+            return "", ""
+    
+    def query_hoyolab_qrcode_status(self, ticket: str) -> Tuple[str, str, str, str]:
+        """查询 hoyolab 扫码登录二维码状态（新 passport API）
+
+        POST https://passport-api.miyoushe.com/account/ma-cn-passport/web/queryQRLoginStatus
+
+        Returns: (status_name, uid, mid, token)
+        - status_name: "Created" / "Scanned" / "Confirmed" / "Expired"
+        - uid/mid/token: 仅 Confirmed 时有值
+          - token: 从响应 Set-Cookie 提取 (优先级: ltoken_v2 > cookie_token)
+
+        特殊 retcode:
+        - -3501: 二维码已过期
+        - -3505: 用户取消扫码
+        """
+        headers = self._hoyolab_headers()
+        data = {"ticket": ticket}
+
+        try:
+            resp = _safe_post(HOYOLAB_QR_QUERY, json_data=data, headers=headers)
+            result = resp.json()
+            qr_log(f"[hoyolab_qr_query] response: {result}", LogLevel.DEBUG)
+
+            retcode = result.get("retcode", -1)
+
+            # 过期/取消
+            if retcode == -3501:
+                qr_log(f"[hoyolab_qr_query] 二维码已过期 (-3501)", LogLevel.DEBUG)
+                return "Expired", "", "", ""
+            if retcode == -3505:
+                qr_log(f"[hoyolab_qr_query] 用户取消扫码 (-3505)", LogLevel.DEBUG)
+                return "Expired", "", "", ""
+            if retcode != 0:
+                msg = result.get("message", "")
+                qr_log(f"[hoyolab_qr_query] retcode={retcode} msg={msg} → Expired", LogLevel.WARN)
+                return "Expired", "", "", ""
+
+            status = result["data"]["status"]
+            qr_log(f"[hoyolab_qr_query] status={status}", LogLevel.DEBUG)
+
+            if status == "Confirmed":
+                user_info = result["data"].get("user_info", {})
+                uid = str(user_info.get("aid", ""))
+                mid = str(user_info.get("mid", ""))
+
+                # 从 Set-Cookie 提取 token
+                token = self._extract_token_from_cookies(resp)
+                qr_log(
+                    f"[hoyolab_qr_query] Confirmed! uid={uid}, mid={mid}, "
+                    f"token={'✓' if token else '✗'}",
+                    LogLevel.DEBUG
+                )
+                return "Confirmed", uid, mid, token
+
+            elif status == "Scanned":
+                return "Scanned", "", "", ""
+            elif status == "Created":
+                return "Created", "", "", ""
+            else:
+                qr_log(f"[hoyolab_qr_query] unknown status={status}", LogLevel.WARN)
+                return "Expired", "", "", ""
+
+        except Exception as e:
+            qr_log(f"[hoyolab_qr_query] 异常: {e}", LogLevel.WARN)
+            return "Created", "", "", ""
+    
+    def _extract_token_from_cookies(self, resp) -> str:
+        """从 HTTP 响应中提取登录 token（优先级: ltoken_v2 > cookie_token）
+
+        hoyolab QR 确认登录后，token 通过 Set-Cookie 头返回，不在 JSON body 中。
+        常见 cookie 名称: ltoken_v2, cookie_token, ltoken, stoken
+        """
+        try:
+            # 方式1: 从响应 cookies 属性获取
+            for name in ["ltoken_v2", "cookie_token", "ltoken", "stoken"]:
+                val = self._get_cookie(resp, name)
+                if val:
+                    qr_log(f"[cookie_extract] found {name}={val[:16]}...", LogLevel.DEBUG)
+                    return val
+
+            # 方式2: 解析 Set-Cookie 原始头
+            set_cookie = resp.headers.get("Set-Cookie", "")
+            if set_cookie:
+                import re
+                for name in ["ltoken_v2", "cookie_token", "ltoken", "stoken"]:
+                    match = re.search(rf'{name}=([^;]+)', set_cookie)
+                    if match:
+                        val = match.group(1)
+                        qr_log(f"[cookie_extract] found {name} from Set-Cookie header", LogLevel.DEBUG)
+                        return val
+
+            qr_log("[cookie_extract] no token found in cookies", LogLevel.WARN)
+            return ""
+        except Exception as e:
+            qr_log(f"[cookie_extract] error: {e}", LogLevel.WARN)
+            return ""
+    
+    @staticmethod
+    def _get_cookie(resp, name: str) -> str:
+        """从响应对象提取指定名称的 cookie"""
+        try:
+            cookies = resp.cookies
+            # requests.cookies (RequestsCookieJar) / curl_cffi cookies
+            if hasattr(cookies, 'get'):
+                return cookies.get(name, "")
+            else:
+                return cookies.get(name, "")
+        except Exception:
+            return ""
+    
+    # ═══════════════════════════════════════════════════════════════
+    
     def get_stoken_by_game_token(self, uid: str, game_token: str, ticket: str = "", biz_key: str = "") -> Tuple[int, str, str]:
-        """通过game_token获取stoken。
-        
-        对应C++ MhyApi.hpp GetStokenByGameToken：
-        - 请求体仅含 account_id(int) + game_token，无 device/ticket
-        - Header 始终用 x-rpc-game_biz: bbs_cn（QR登录是通行证/BBS流程，不是游戏流程）
-        - 无状态HTTP POST，不携带任何cookies
+        """通过game_token获取stoken（已废弃，保留用于回退兼容）。
+
+        该接口 getTokenByGameToken 已被米哈游废弃（返回 -5300）。
+        请使用 get_stoken_by_login_ticket() 替代。
         """
         import requests as req
 
@@ -600,15 +983,11 @@ class MhyApi:
             "account_id": int(uid),
             "game_token": game_token
         }
-        # 注意：C++参考代码中请求体只包含这两个字段，不包含 device 或 ticket
 
         headers = get_request_headers()
-        # 关键：不要覆盖 x-rpc-game_biz！C++ 始终使用 "bbs_cn"
-        # QR登录是米哈游通行证(BBS)流程，不是 bh3_cn 等游戏流程
 
         api_log(f"[get_stoken_by_game_token] uid={uid}", LogLevel.DEBUG)
         api_log(f"[get_stoken_by_game_token] request: {json.dumps(data)}", LogLevel.DEBUG)
-        api_log(f"[get_stoken_by_game_token] headers.game_biz: {headers.get('x-rpc-game_biz', 'N/A')}", LogLevel.DEBUG)
 
         try:
             resp = req.post(GAME_TOKEN_STOKEN, json=data, headers=headers, timeout=10)
@@ -626,6 +1005,46 @@ class MhyApi:
                 return retcode, "", ""
         except Exception as e:
             api_log(f"[get_stoken_by_game_token] ex: {e}", LogLevel.ERROR)
+            return -1, "", ""
+
+    def get_stoken_by_login_ticket(self, uid: str, login_ticket: str) -> Tuple[int, str, str]:
+        """通过 login_ticket 获取 stoken（新版 API，替代已废弃的 getTokenByGameToken）。
+
+        扫码确认后从 hk4e-sdk query 返回的 token 实际是 login_ticket，
+        通过 getMultiTokenByLoginTicket 接口可直接兑换 stoken。
+
+        Returns: (retcode, mid, stoken)
+        """
+        import requests as req
+
+        data = {
+            "login_ticket": login_ticket,
+            "token_types": [3],
+            "uid": uid
+        }
+
+        headers = get_request_headers()
+        # x-rpc-game_biz: bbs_cn — 通行证/BBS 流程
+
+        api_log(f"[get_stoken_by_login_ticket] uid={uid}", LogLevel.DEBUG)
+        api_log(f"[get_stoken_by_login_ticket] request: {json.dumps(data)}", LogLevel.DEBUG)
+
+        try:
+            resp = req.post(MULTI_TOKEN, json=data, headers=headers, timeout=10)
+            result = resp.json()
+            api_log(f"[get_stoken_by_login_ticket] response: {result}", LogLevel.DEBUG)
+
+            retcode = result.get("retcode", -1)
+            if retcode == 0:
+                mid = result["data"]["user_info"]["mid"]
+                stoken = result["data"]["token"]["token"]
+                api_log(f"[get_stoken_by_login_ticket] success!")
+                return 0, mid, stoken
+            else:
+                api_log(f"[get_stoken_by_login_ticket] retcode={retcode}, msg={result.get('message', '')}", LogLevel.WARN)
+                return retcode, "", ""
+        except Exception as e:
+            api_log(f"[get_stoken_by_login_ticket] ex: {e}", LogLevel.ERROR)
             return -1, "", ""
     
     def get_game_token_by_stoken(self, stoken: str, mid: str) -> Tuple[int, str]:
