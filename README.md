@@ -322,18 +322,13 @@ pyinstaller --onefile --windowed \
 
 ## 更新日志
 
-### v1.0.1 (2026-05-28)
-
-- 修复了验证码登录的问题，现在可以使用验证码了
-- 修复了一些小问题
-- 当前版本验证码暂不支持HarmonyOS及IOS，后续版本修复
-
 ### v1.0.2 (2026-05-31)
 
 - **扫码登录迁移至 hoyolab Passport API**：端点由 `hk4e-sdk.mihoyo.com` 迁移至 `passport-api.miyoushe.com`
 - 确认登录后 Token 通过 `Set-Cookie` 头直接返回（ltoken_v2 / cookie_token），无需额外的 login_ticket → stoken 转换步骤
 - 短信登录新增 GeeTest 滑块验证自动处理（风控 `-3101` 触发后自动弹出）
 - 修复 hk4e-sdk 旧 API 因 WAF `-3503` 导致二维码误判为过期的 BUG
+- 当前版本验证码暂不支持HarmonyOS及IOS，后续版本修复
 
 ---
 
