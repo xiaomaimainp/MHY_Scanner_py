@@ -209,6 +209,7 @@ MHY_Scanner/
 │
 ├── Config/                     # 配置文件目录
 │   ├── config.json             # 应用设置（自动生成）
+|   ├── cookie.json             # 应用数据（自动生成）
 │   └── userinfo.json           # 账号数据（自动生成）
 │
 ├── icons/                      # 应用图标
