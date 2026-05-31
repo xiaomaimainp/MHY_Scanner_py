@@ -4,7 +4,7 @@
 
 参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
-> **最新版本**: v1.0.1
+> **最新版本**: v1.0.2
 
 > **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
 
@@ -14,7 +14,8 @@
 
 ## 功能特性
 
-- **扫码登录**：支持米游社 APP 扫描二维码登录
+- **扫码登录**：基于 hoyolab Passport API，米游社 APP 扫码后确认即返回 Token，无需额外转换步骤
+- **短信登录**：支持手机号 + 验证码登录，内置 GeeTest 滑块验证（风控触发后自动处理）
 - **Cookie 登录**：支持粘贴 SToken Cookie 直接登录（stuid + stoken + mid）
 - **B站崩坏3登录**：支持 BiliBili 服账号密码登录，内置 GeeTest 滑块验证
 - **屏幕扫描**：自动监视屏幕中出现的游戏内二维码，一键确认登录
@@ -96,7 +97,16 @@ python main.py
 1. 启动程序，点击"扫码登录"
 2. 选择游戏和服务器类型
 3. 使用米游社 APP 扫描屏幕上显示的二维码
-4. 等待登录完成，账号自动保存到列表
+4. 在手机上点击"确认登录"，Token 自动获取，账号自动保存到列表
+
+> 扫码登录基于 **hoyolab Passport API**（`passport-api.miyoushe.com`），确认登录后 Token 通过 `Set-Cookie` 直接返回，无需额外的 ticket 兑换步骤。
+
+### 短信登录
+
+1. 点击"短信登录"
+2. 输入手机号和验证码
+3. 如遇风控（-3101），自动弹出 GeeTest 滑块验证
+4. 验证通过后自动完成登录
 
 ### Cookie 登录
 
@@ -180,7 +190,7 @@ MHY_Scanner/
 ├── requirements.txt            # Python 依赖清单
 │
 ├── api/                        # API 层
-│   ├── api.py                  # 米哈游 API 核心（自生成二维码 / 游戏内二维码 / Token 交换）
+│   ├── api.py                  # 米哈游 API 核心（hoyolab扫码 / 短信登录 / 游戏内二维码 / Token 交换）
 │   └── bsgamesdk.py            # B站 SDK（崩坏3 B服 账号密码登录）
 │
 ├── core/                       # 核心模块
@@ -193,7 +203,7 @@ MHY_Scanner/
 │
 ├── ui/                         # 用户界面
 │   ├── main_window.py          # 主窗口（账号管理 / 扫描控制 / 菜单栏）
-│   ├── login_window.py         # 登录窗口（3 种登录方式 Tab 页）
+│   ├── login_window.py         # 登录窗口（4 种登录方式 Tab 页）
 │   ├── account_manager.py      # 账号管理器
 │   ├── add_account_dialog.py   # 手动添加账号对话框
 │   ├── config_editor.py        # 内置配置文件编辑器（JSON 高亮 + 行号）
@@ -209,7 +219,7 @@ MHY_Scanner/
 │
 ├── Config/                     # 配置文件目录
 │   ├── config.json             # 应用设置（自动生成）
-|   ├── cookie.json             # 应用数据（自动生成）
+│   ├── cookie.json             # 抖音/B站 Cookie 存储（自动生成）
 │   └── userinfo.json           # 账号数据（自动生成）
 │
 ├── icons/                      # 应用图标
@@ -265,8 +275,9 @@ pyinstaller --onefile --windowed \
 
 ### WAF 风控
 
-- 米哈游对 API 请求有 WAF 风控（错误码 -3503）
-- 自生成二维码轮询使用 `app_id=2`（未定事件簿，WAF 最宽松）
+- 米哈游对 API 请求有 WAF 风控（错误码 `-3503` / `-3101`）
+- **扫码登录**（自生成二维码）：使用 **hoyolab Passport API**（`passport-api.miyoushe.com`），WAF 策略更宽松，轮询稳定
+- **屏幕扫描**（游戏内二维码）：使用 hk4e-sdk 端点，仍可能触发 WAF
 - 推荐安装 `curl_cffi` 库模拟真实浏览器 TLS 指纹绕过风控
 - 轮询间隔已加入 0~500ms 随机抖动，避免触发频率限制
 
@@ -316,6 +327,13 @@ pyinstaller --onefile --windowed \
 - 修复了验证码登录的问题，现在可以使用验证码了
 - 修复了一些小问题
 - 当前版本验证码暂不支持HarmonyOS及IOS，后续版本修复
+
+### v1.0.2 (2026-05-31)
+
+- **扫码登录迁移至 hoyolab Passport API**：端点由 `hk4e-sdk.mihoyo.com` 迁移至 `passport-api.miyoushe.com`
+- 确认登录后 Token 通过 `Set-Cookie` 头直接返回（ltoken_v2 / cookie_token），无需额外的 login_ticket → stoken 转换步骤
+- 短信登录新增 GeeTest 滑块验证自动处理（风控 `-3101` 触发后自动弹出）
+- 修复 hk4e-sdk 旧 API 因 WAF `-3503` 导致二维码误判为过期的 BUG
 
 ---
 
