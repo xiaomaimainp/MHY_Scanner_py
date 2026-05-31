@@ -307,10 +307,16 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout()
         central_widget.setLayout(main_layout)
         
-        # 状态标签
-        self.status_label = QLabel("当前选中账号：无")
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(self.status_label)
+        # 状态栏：左侧账号信息，右侧监视状态
+        status_layout = QHBoxLayout()
+        self.account_label = QLabel("当前选中账号：无")
+        self.account_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        status_layout.addWidget(self.account_label)
+        status_layout.addStretch()
+        self.scan_status_label = QLabel("")
+        self.scan_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        status_layout.addWidget(self.scan_status_label)
+        main_layout.addLayout(status_layout)
         
         # 直播间设置区域
         stream_layout = QGridLayout()
@@ -918,7 +924,7 @@ class MainWindow(QMainWindow):
         self.selected_account = self.account_manager.get_account(uid, server_type)
         
         if self.selected_account:
-            self.status_label.setText(f"当前选中账号: {self.selected_account.name}")
+            self.account_label.setText(f"当前选中账号：{self.selected_account.name}")
             self.api.set_server_type(ServerType(self.selected_account.server_type))
             self.api.set_game_type(GameType(self.selected_account.game_type))
             main_log(f"选中账号: {self.selected_account.name}, uid={uid}, server={server_type}, game={self.selected_account.game_type}")
@@ -1303,7 +1309,7 @@ class MainWindow(QMainWindow):
 
         self.btn_screen_scan.setText("停止监视")
         self.btn_screen_scan.setStyleSheet("background-color: #4CAF50;")
-        self.status_label.setText("正在监视屏幕...")
+        self.scan_status_label.setText("正在监视屏幕...")
     
     def stop_screen_scan(self):
         """停止屏幕扫描"""
@@ -1320,7 +1326,8 @@ class MainWindow(QMainWindow):
         self.is_screen_scanning = False
         self.btn_screen_scan.setText("监视屏幕")
         self.btn_screen_scan.setStyleSheet("")
-        self.status_label.setText("屏幕监视已停止")
+        self.scan_status_label.setText("屏幕监视已停止")
+        QTimer.singleShot(1000, lambda: self.scan_status_label.clear())
         main_log("屏幕扫描已停止")
     
     def toggle_screen_scan(self):
@@ -1373,7 +1380,7 @@ class MainWindow(QMainWindow):
         
         self.btn_stream_scan.setText("停止监视")
         self.btn_stream_scan.setStyleSheet("background-color: #4CAF50;")
-        self.status_label.setText(f"正在监视直播间 {room_id}...")
+        self.scan_status_label.setText(f"正在监视直播间 {room_id}...")
     
     def stop_stream_scan(self):
         """停止直播流扫描"""
@@ -1390,7 +1397,8 @@ class MainWindow(QMainWindow):
         self.is_stream_scanning = False
         self.btn_stream_scan.setText("监视直播间")
         self.btn_stream_scan.setStyleSheet("")
-        self.status_label.setText("直播监视已停止")
+        self.scan_status_label.setText("直播监视已停止")
+        QTimer.singleShot(1000, lambda: self.scan_status_label.clear())
         main_log("直播扫描已停止")
     
     def toggle_stream_scan(self):
@@ -1613,11 +1621,10 @@ class MainWindow(QMainWindow):
         changelog.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         changelog.viewport().setCursor(Qt.CursorShape.ArrowCursor)
         changelog.setHtml("""
-            <h3>v1.0.1 (2026-05)</h3>
+            <h3>v1.0.2 (2026-05)</h3>
             <ul>
                 <li>支持验证码登录</li>
-                <li>修复了验证码登录的问题，现在可以使用验证码了</li>
-                <li>修复了一些小问题</li>
+                <li>修复了二维码登录显示decode err response body error: unexpected end of JSON input的问题</li>
                 <li>当前版本验证码暂不支持HarmonyOS及IOS，后续修复</li>
             </ul>
             <hr>
