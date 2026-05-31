@@ -257,7 +257,7 @@ pyinstaller --onefile --windowed \
 
 预编译的 `.exe` 文件可直接运行，无需安装 Python 环境：
 
-1. 下载 `MHY_Scanner.exe`
+1. 下载并安装 `MHY_Scanner.exe`
 2. 确保系统已安装 [VC++ Redist 运行时](https://aka.ms/vs/17/release/vc_redist.x64.exe)
 3. 直播流扫描需要安装 FFmpeg 并加入 PATH
 
