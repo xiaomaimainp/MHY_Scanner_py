@@ -28,12 +28,14 @@ from PyQt6.QtGui import QPixmap, QImage, QFont, QCursor
 
 
 class QRCodeCheckWorker(QObject):
-    """二维码状态检查 Worker（对齐 C++ WindowLogin::CheckQRCodeLoginState）
+    """二维码状态检查 Worker（hoyolab passport API 版）
 
-    C++ 中 CheckQRCodeLoginState 仅调用 GetQRCodeState(ticket) 轮询，
-    Scanned 状态下不额外调用 scan_qrcode（自生成二维码无需 scan 步骤）。
+    使用 hoyolab passport API:
+    - POST createQRLogin → 获取二维码 (url + ticket)
+    - POST queryQRLoginStatus → 轮询状态 (Created/Scanned/Confirmed)
+    - Confirmed 时 token 通过 Set-Cookie 头直接返回，无需额外转换
     """
-    state_changed = pyqtSignal(str, str, str)  # (state_name, uid, token)
+    state_changed = pyqtSignal(str, str, str, str)  # (state_name, uid, mid, token)
     finished = pyqtSignal()
 
     def __init__(self, api: MhyApi, ticket: str):
@@ -49,23 +51,17 @@ class QRCodeCheckWorker(QObject):
         self._running = False
 
     def run(self):
-        """
-        对齐 C++ WindowLogin::CheckQRCodeLoginState():
-        - 每1秒检查一次状态（C++ QrcodeTimer->start(1000)）
-        - 不额外调用 scan_qrcode
-        """
-        base_interval = 1  # 对齐 C++ QrcodeTimer->start(1000)
+        """每 1.5 秒轮询 hoyolab passport QR 状态"""
+        base_interval = 1.5
         while self._running:
             try:
-                state, uid, token = self.api.query_qrcode_state(self.ticket)
-                self.state_changed.emit(state.name, uid, token)
+                status, uid, mid, token = self.api.query_hoyolab_qrcode_status(self.ticket)
+                self.state_changed.emit(status, uid, mid, token)
 
-                if state == LoginQRCodeState.Confirmed or state == LoginQRCodeState.Expired:
+                if status in ("Confirmed", "Expired"):
                     self._running = False
                     break
 
-                # C++ Qt 事件循环有自然抖动（事件处理延迟），Python time.sleep 过于精确，
-                # 添加 0~0.5s 随机抖动降低被 WAF 识别为机器人的概率
                 time.sleep(base_interval + random.random() * 0.5)
             except Exception as e:
                 qr_log(f"检查二维码状态异常: {e}", LogLevel.WARN)
@@ -570,7 +566,7 @@ class LoginWindow(QDialog):
 
         def fetch_qr():
             try:
-                url, ticket = self.api.fetch_qrcode_url()
+                url, ticket = self.api.fetch_hoyolab_qrcode()
                 # 通过信号在主线程更新UI
                 self.qr_fetched.emit(url, ticket)
             except Exception as e:
@@ -679,48 +675,40 @@ class LoginWindow(QDialog):
         """二维码检查线程结束"""
         pass
 
-    def on_qr_state_changed(self, state_name: str, uid: str, token: str):
-        """二维码状态变化（对齐 C++ CheckQRCodeLoginState）"""
-        if state_name == "Init":
+    def on_qr_state_changed(self, state_name: str, uid: str, mid: str, token: str):
+        """二维码状态变化（hoyolab passport API）
+        状态名: Created / Scanned / Confirmed / Expired
+        """
+        if state_name == "Created":
             pass
         elif state_name == "Scanned":
             # 对齐 C++: "正在登录\n\n请在手机上点击「确认登录」"
             self.qr_prompt.setText("正在登录\n\n请在手机上点击「确认登录」")
         elif state_name == "Confirmed":
-            self.on_qr_confirmed(uid, token)
+            self.on_qr_confirmed(uid, mid, token)
         elif state_name == "Expired":
-            # 对齐 C++ QrcodeLoginResult(false):
-            #   1. QR 图片变暗 (QRCodeQImage = Mat - Scalar(200))
-            #   2. 显示刷新按钮 UpdateQrcodeButton->setVisible(true)
-            #   3. 不自动刷新，由用户点击按钮触发 StartQRCodeLogin
             self._on_qr_expired()
 
-    def on_qr_confirmed(self, uid: str, token: str):
-        """二维码确认登录（对应C++ WindowLogin::CheckQRCodeLoginState）"""
+    def on_qr_confirmed(self, uid: str, mid: str, token: str):
+        """二维码确认登录（hoyolab passport API — Token 由 Set-Cookie 直接返回）"""
         try:
-            qr_log(f"uid={uid}, token={token[:30] if token else 'None'}...", LogLevel.DEBUG)
-
-            # C++参考: 直接调用 GetStokenByGameToken(uid, game_token)
-            # 不传 ticket/biz_key，请求体仅含 account_id + game_token
-            code, mid, stoken = self.api.get_stoken_by_game_token(uid, token)
-
-            if code != 0 or not stoken:
-                # 参考源项目：stoken获取失败时弹窗提示，不静默降级
-                qr_log(f"获取STOKEN失败! code={code}", LogLevel.ERROR)
-                gui_log("获取STOKEN失败！请重试或使用Cookie登录。", LogLevel.ERROR)
-                QMessageBox.warning(self, "错误", "获取STOKEN失败！\n请重试或使用Cookie登录。")
+            if not token:
+                qr_log("确认登录失败: token 为空", LogLevel.ERROR)
+                gui_log("获取 Token 失败！请重试。", LogLevel.ERROR)
+                QMessageBox.warning(self, "错误", "获取 Token 失败！\n请重试或使用 Cookie 登录。")
                 self.qr_prompt.setText("登录失败\n点击刷新重试")
                 return
 
-            # 步骤2：stoken获取成功，获取用户名
-            qr_log(f"stoken获取成功 mid={mid}")
+            qr_log(f"uid={uid}, mid={mid}, token={token[:16]}...", LogLevel.DEBUG)
+
+            # 获取用户名
             name = self.api.get_mys_user_name(uid)
             if not name:
                 name = f"用户{uid}"
 
-            # 步骤3：更新UI + 发送登录成功信号（参考C++ emit AddUserInfo + QRCodelabel->setText + emit QrcodeLoginResult）
+            # 发送登录成功信号
             self.qr_prompt.setText("登录成功！")
-            self.login_success.emit(name, stoken, uid, mid, "官服")
+            self.login_success.emit(name, token, uid, mid, "官服")
             self.close()
 
         except Exception as e:
