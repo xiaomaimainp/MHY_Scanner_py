@@ -3,9 +3,6 @@ import os
 import subprocess
 import traceback
 
-# 添加当前目录到 sys.path 以支持绝对导入
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -38,7 +35,7 @@ def main():
 
     # 设置应用信息
     app.setApplicationName("MHY_Scanner")
-    app.setApplicationVersion("1.0.1")
+    app.setApplicationVersion("1.0.3")
     app.setOrganizationName("MHY")
 
     # 设置全局字体

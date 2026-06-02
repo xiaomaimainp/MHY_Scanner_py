@@ -4,7 +4,7 @@
 
 参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
-> **最新版本**: v1.0.2
+> **最新版本**: v1.0.3
 >
 > **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
 
@@ -15,9 +15,10 @@
 ## 功能特性
 
 - **扫码登录**：基于 hoyolab Passport API，米游社 APP 扫码后确认即返回 Token，无需额外转换步骤
-- **短信登录**：支持手机号 + 验证码登录，内置 GeeTest 滑块验证（风控触发后自动处理）
+- **短信登录**：支持手机号 + 验证码登录
 - **Cookie 登录**：支持粘贴 SToken Cookie 直接登录（stuid + stoken + mid）
-- **B站崩坏3登录**：支持 BiliBili 服账号密码登录，内置 GeeTest 滑块验证
+- **B站崩坏3登录**：支持 BiliBili 服账号密码登录
+- **Cookie 刷新**：支持抖音/B站 Cookie 刷新（设置 → 刷新Cookie）
 - **屏幕扫描**：自动监视屏幕中出现的游戏内二维码，一键确认登录
 - **直播流扫描**：从 B站 / 抖音直播间实时检测二维码并自动登录
 - **多账号管理**：支持多账号存储、默认账号标记、服务器和备注编辑
@@ -28,7 +29,7 @@
 - **自动启动扫描**：打开程序后自动开始屏幕扫描（开关，默认关闭）
 - **窗口置顶**：主窗口始终位于最前
 - **内置配置编辑器**：JSON 语法高亮、行号显示、智能缩进、缩放
-- **检查更新**：支持版本更新
+- **检查更新**：支持 GitHub Release 版本更新
 
 ---
 
@@ -105,8 +106,7 @@ python main.py
 
 1. 点击"短信登录"
 2. 输入手机号和验证码
-3. 如遇风控（-3101），自动弹出 GeeTest 滑块验证
-4. 验证通过后自动完成登录
+3. 验证通过后自动完成登录
 
 ### Cookie 登录
 
@@ -118,8 +118,7 @@ python main.py
 
 1. 点击"B站崩坏3"
 2. 输入 B站 账号和密码
-3. 完成 GeeTest 滑块验证
-4. 登录成功后账号自动保存
+3. 登录成功后账号自动保存
 
 ### 屏幕扫描（自动登录）
 
@@ -185,44 +184,35 @@ python main.py
 
 ```text
 MHY_Scanner/
-├── main.py                     # 程序入口
-├── __init__.py                 # 包入口，版本号定义
+├── main.py                     # 程序入口（版本号统一管理）
+├── __init__.py                 # 包入口
 ├── requirements.txt            # Python 依赖清单
-│
 ├── api/                        # API 层
 │   ├── api.py                  # 米哈游 API 核心（hoyolab扫码 / 短信登录 / 游戏内二维码 / Token 交换）
 │   └── bsgamesdk.py            # B站 SDK（崩坏3 B服 账号密码登录）
-│
 ├── core/                       # 核心模块
 │   ├── config.py               # 配置管理（单例，兼容 C++ userinfo.json）
 │   └── logger.py               # 日志系统（控制台 / 文件输出，多标签分类）
-│
 ├── scanner/                    # 扫描模块
 │   ├── scanner.py              # 屏幕二维码扫描器 + 直播流扫描器
 │   └── livestream.py           # 直播流获取（B站 / 抖音）
-│
 ├── ui/                         # 用户界面
 │   ├── main_window.py          # 主窗口（账号管理 / 扫描控制 / 菜单栏）
 │   ├── login_window.py         # 登录窗口（4 种登录方式 Tab 页）
 │   ├── account_manager.py      # 账号管理器
 │   ├── add_account_dialog.py   # 手动添加账号对话框
 │   ├── config_editor.py        # 内置配置文件编辑器（JSON 高亮 + 行号）
-│   └── geetest_verify.py       # GeeTest 滑块验证（PyQt6-WebEngine）
-│
+│   └── cookie_refresh_dialog.py # Cookie 刷新对话框（抖音/B站扫码刷新）
 ├── utils/                      # 工具模块
 │   └── update.py               # 热更新管理器
-│
 ├── hooks/                      # PyInstaller 打包钩子
 │   ├── hook-curl_cffi.py
 │   ├── hook-PIL.py
 │   └── hook-pyzbar.py
-│
 ├── Config/                     # 配置文件目录
 │   ├── config.json             # 应用设置（自动生成）
 │   ├── cookie.json             # 抖音/B站 Cookie 存储（自动生成）
 │   └── userinfo.json           # 账号数据（自动生成）
-│
-├── icons/                      # 应用图标
 └── log/                        # 日志目录（自动生成）
 ```
 
@@ -248,10 +238,9 @@ pyinstaller --onefile --windowed \
 
 ### 打包注意事项
 
-1. **ScanModel 目录**必须随 exe 一同分发（包含 QR 码检测和超分模型）
-2. **curl_cffi** 为可选依赖，打包时建议包含以提升扫码轮询成功率
-3. 使用 `hooks/` 目录下的钩子文件确保相关子模块被正确收集
-4. 打包后日志默认输出到文件（`log/` 目录），而非控制台
+1. **curl_cffi** 为可选依赖，打包时建议包含以提升扫码轮询成功率
+2. 使用 `hooks/` 目录下的钩子文件确保相关子模块被正确收集
+3. 打包后日志默认输出到文件（`log/` 目录），而非控制台
 
 ### 已打包版本
 
@@ -268,14 +257,14 @@ pyinstaller --onefile --windowed \
 ### 使用注意
 
 1. **米游社 APP**：扫码登录需要在手机上安装米游社 APP 并已登录目标账号
-2. **B站崩坏3**：仅支持崩坏3 BiliBili 服，登录可能需要完成 GeeTest 滑块验证
+2. **B站崩坏3**：仅支持崩坏3 BiliBili 服
 3. **直播流扫描**：需要先在系统上安装 FFmpeg，并确保非免流直播间
 4. **网络环境**：需要能够正常访问米哈游 API（`api-sdk.mihoyo.com` 等域名）
 5. **配置编辑器**：使用内置配置编辑器修改配置文件前建议备份，格式错误可能导致程序异常
 
 ### WAF 风控
 
-- 米哈游对 API 请求有 WAF 风控（错误码 `-3503` / `-3101`）
+- 米哈游对 API 请求有 WAF 风控（错误码 `-3503`）
 - **扫码登录**（自生成二维码）：使用 **hoyolab Passport API**（`passport-api.miyoushe.com`），WAF 策略更宽松，轮询稳定
 - **屏幕扫描**（游戏内二维码）：使用 hk4e-sdk 端点，仍可能触发 WAF
 - 推荐安装 `curl_cffi` 库模拟真实浏览器 TLS 指纹绕过风控
@@ -300,7 +289,7 @@ pyinstaller --onefile --windowed \
 | 依赖 | 最低版本 | 用途 |
 | ------ | ------- | ------ |
 | PyQt6 | ≥6.4.0 | GUI 框架 |
-| PyQt6-WebEngine | ≥6.4.0 | GeeTest 滑块验证（可选） |
+| PyQt6-WebEngine | ≥6.4.0 | Cookie 刷新浏览器内核 |
 | opencv-python | ≥4.8.0 | 图像处理与二维码检测 |
 | numpy | ≥1.24.0 | 数值计算 |
 | requests | ≥2.31.0 | HTTP 请求 |
@@ -322,13 +311,10 @@ pyinstaller --onefile --windowed \
 
 ## 更新日志
 
-### v1.0.2 (2026-05-31)
+### v1.0.3 (2026-06)
 
-- **扫码登录迁移至 hoyolab Passport API**：端点由 `hk4e-sdk.mihoyo.com` 迁移至 `passport-api.miyoushe.com`
-- 确认登录后 Token 通过 `Set-Cookie` 头直接返回（ltoken_v2 / cookie_token），无需额外的 login_ticket → stoken 转换步骤
-- 短信登录新增 GeeTest 滑块验证自动处理（风控 `-3101` 触发后自动弹出）
-- 修复 hk4e-sdk 旧 API 因 WAF `-3503` 导致二维码误判为过期的 BUG
-- 当前版本验证码暂不支持HarmonyOS及IOS，后续版本修复
+- **新增 Cookie 刷新功能**：抖音直接点击刷新即可，B站需扫码登录提取登录态
+- 当前版本验证码暂不支持 HarmonyOS 及 iOS
 
 ---
 
