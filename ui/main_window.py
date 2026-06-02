@@ -19,6 +19,7 @@ from scanner import ScreenScanner, StreamScanner, LivePlatform, get_live_info, L
 from .account_manager import AccountManager
 from core.config import ConfigManager, Account, get_base_dir
 from .config_editor import ConfigEditor
+from .cookie_refresh_dialog import CookieRefreshDialog
 from api import MhyApi, GameType, ServerType, ScanRet, LoginQRCodeState
 from .login_window import LoginWindow
 from utils.update import restart_program
@@ -177,9 +178,36 @@ class GameComboDelegate(QStyledItemDelegate):
 class MainWindow(QMainWindow):
     """主窗口"""
     
-    VERSION = "1.0.0"
-    GITHUB_URL = "https://github.com/Theresa-0328/MHY_Scanner"
-    ICON_URL = "https://raw.githubusercontent.com/Theresa-0328/MHY_Scanner/main/icon.png"
+    GITHUB_URL = "https://github.com/MR-LIYA/MHY_Scanner"
+    GITHUB_ISSUES_URL = "https://github.com/MR-LIYA/MHY_Scanner/issues"
+
+    GAME_NAMES = {
+        GameType.Honkai3: "崩坏3",
+        GameType.Honkai3_BiliBili: "BiliBili崩坏3",
+        GameType.Genshin: "原神",
+        GameType.HonkaiStarRail: "星穹铁道",
+        GameType.ZenlessZoneZero: "绝区零",
+    }
+
+    MID_HELP_TEXT = (
+        "当前账号缺少 MID，无法获取登录凭证！\n\n"
+        "请输入 MID 后再试。获取 MID 的方法：\n"
+        "1. 浏览器打开 https://user.mihoyo.com\n"
+        "2. 登录后，地址栏中 ?login_ticket=... 之后的数字串就是 MID\n"
+        "3. 也可以尝试 https://api-takumi.mihoyo.com/account/wapi/getUserInfo?stoken=你的stoken\n"
+        "（响应中的 data.user_info.aid 即为 MID）\n\n"
+        "添加 MID：右键账号 → 编辑MID"
+    )
+
+    CHANGELOG_HTML = """
+            <h3>v1.0.3 (2026-05)</h3>
+            <ul>
+                <li>支持手动刷新cookie（抖音直接刷新即可，B站需要扫码登陆一下提取登录态）</li>
+                <li>当前版本验证码暂不支持HarmonyOS及IOS，后续修复</li>
+            </ul>
+            <hr>
+            <p style='color:gray;font-size:12px;'>本项目为参考项目改进而来，修复了已知 BUG。</p>
+        """
 
     @staticmethod
     def _create_default_pixmap() -> QPixmap:
@@ -194,30 +222,16 @@ class MainWindow(QMainWindow):
         return QIcon(MainWindow._create_default_pixmap())
 
     def _load_window_icon(self):
-        """加载窗口图标（优先网络，本地备用）"""
+        """加载窗口图标（仅本地加载）"""
         icon_path = str(get_base_dir() / "icons" / "app.png")
-        os.makedirs(str(get_base_dir() / "icons"), exist_ok=True)
 
-        # 如果本地图标存在，直接使用
+        # 本地图标存在则直接使用
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
             return
 
-        try:
-            # 尝试从网络下载
-            response = requests.get(self.ICON_URL, timeout=3)
-            if response.status_code == 200:
-                with open(icon_path, 'wb') as f:
-                    f.write(response.content)
-                self.setWindowIcon(QIcon(icon_path))
-                return
-        except Exception:
-            pass
-
-        # 网络失败，使用默认图标
-        default_pixmap = self._create_default_pixmap()
-        default_pixmap.save(icon_path)  # 保存到本地（QPixmap才有save方法）
-        self.setWindowIcon(QIcon(default_pixmap))
+        # 本地不存在，使用默认图标
+        self.setWindowIcon(self._create_default_icon())
 
     def __init__(self):
         super().__init__()
@@ -264,30 +278,9 @@ class MainWindow(QMainWindow):
         # 加载账号
         self.load_accounts()
         
-        # 启动时后台自动获取抖音 Cookie
-        threading.Thread(target=self._auto_refresh_douyin_cookie, daemon=True).start()
-        # 启动时后台自动获取B站 Cookie
-        threading.Thread(target=self._auto_refresh_bilibili_cookie, daemon=True).start()
-        
         # 自动开始检查
         if self.config.config.auto_start:
             QTimer.singleShot(500, self.start_screen_scan)
-
-    @staticmethod
-    def _auto_refresh_douyin_cookie():
-        """启动时后台自动获取抖音 Cookie"""
-        try:
-            LiveDouyin._get_cookie()
-        except Exception:
-            pass
-
-    @staticmethod
-    def _auto_refresh_bilibili_cookie():
-        """启动时后台自动获取B站 Cookie"""
-        try:
-            LiveBili._get_cookie()
-        except Exception:
-            pass
     
     def init_ui(self):
         """初始化UI"""
@@ -405,7 +398,7 @@ class MainWindow(QMainWindow):
         # 版本信息（右下角显示）
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
-        version_label = QLabel(f"版本 {self.VERSION}")
+        version_label = QLabel(f"版本 {QApplication.instance().applicationVersion()}")
         version_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         bottom_layout.addWidget(version_label)
         main_layout.addLayout(bottom_layout)
@@ -522,6 +515,10 @@ class MainWindow(QMainWindow):
         open_config_action = QAction("打开配置文件", self)
         open_config_action.triggered.connect(self.open_config_file)
         settings_menu.addAction(open_config_action)
+
+        refresh_cookie_action = QAction("刷新Cookie", self)
+        refresh_cookie_action.triggered.connect(self.show_cookie_refresh_dialog)
+        settings_menu.addAction(refresh_cookie_action)
         
         check_update_action = QAction("检查更新", self)
         check_update_action.triggered.connect(self.check_for_updates)
@@ -538,14 +535,14 @@ class MainWindow(QMainWindow):
         changelog_action.triggered.connect(self.show_changelog)
         help_menu.addAction(changelog_action)
         
-        # feedback_action = QAction("反馈问题", self)
-        # feedback_action.triggered.connect(self.open_github_issues)
-        # help_menu.addAction(feedback_action)
-        
-        # homepage_action = QAction("项目主页", self)
-        # homepage_action.triggered.connect(self.open_homepage)
-        # help_menu.addAction(homepage_action)
+        homepage_action = QAction("项目主页", self)
+        homepage_action.triggered.connect(self.open_homepage)
+        help_menu.addAction(homepage_action)
     
+        feedback_action = QAction("反馈问题", self)
+        feedback_action.triggered.connect(self.open_github_issues)
+        help_menu.addAction(feedback_action)
+        
     def load_accounts(self):
         """加载账号到表格"""
         # 暂时断开 itemChanged 信号，避免 setItem() 填充表格时触发保存逻辑
@@ -1143,14 +1140,7 @@ class MainWindow(QMainWindow):
         if not self.config.config.auto_login:
             self._set_window_to_front()
 
-            game_names = {
-                GameType.Honkai3: "崩坏3",
-                GameType.Honkai3_BiliBili: "BiliBili崩坏3",
-                GameType.Genshin: "原神",
-                GameType.HonkaiStarRail: "星穹铁道",
-                GameType.ZenlessZoneZero: "绝区零",
-            }
-            game_name = game_names.get(GameType(account.game_type), "未知游戏")
+            game_name = self.GAME_NAMES.get(GameType(account.game_type), "未知游戏")
             info = f"正在使用账号 {account.name}\n登录 {game_name}\n\n确认登录？"
 
             reply = QMessageBox.question(
@@ -1166,14 +1156,7 @@ class MainWindow(QMainWindow):
         # C++ 中如果获取失败直接 AccountError 并 return
         if not account.mid:
             qr_log("账号缺少 mid，无法将 stoken 转换为 game_token", LogLevel.WARN)
-            QMessageBox.warning(self, "错误", 
-                "当前账号缺少 MID，无法获取登录凭证！\n\n"
-                "请输入 MID 后再试。获取 MID 的方法：\n"
-                "1. 浏览器打开 https://user.mihoyo.com\n"
-                "2. 登录后，地址栏中 ?login_ticket=... 之后的数字串就是 MID\n"
-                "3. 也可以尝试 https://api-takumi.mihoyo.com/account/wapi/getUserInfo?stoken=你的stoken\n"
-                "（响应中的 data.user_info.aid 即为 MID）\n\n"
-                "添加 MID：右键账号 → 编辑MID")
+            QMessageBox.warning(self, "错误", self.MID_HELP_TEXT)
             return
 
         try:
@@ -1212,14 +1195,7 @@ class MainWindow(QMainWindow):
         account_name = self.selected_account.name
         game_type = GameType(self.selected_account.game_type)
 
-        game_names = {
-            GameType.Honkai3: "崩坏3",
-            GameType.Honkai3_BiliBili: "BiliBili崩坏3",
-            GameType.Genshin: "原神",
-            GameType.HonkaiStarRail: "星穹铁道",
-            GameType.ZenlessZoneZero: "绝区零",
-        }
-        game_name = game_names.get(game_type, "未知游戏")
+        game_name = self.GAME_NAMES.get(game_type, "未知游戏")
 
         info = f"正在使用账号 {account_name}\n登录 {game_name}\n\n确认登录？"
 
@@ -1361,8 +1337,12 @@ class MainWindow(QMainWindow):
             return
 
         if live_info.status != LiveStreamStatus.Normal or not live_info.link:
-            gui_log("无法获取直播流", LogLevel.ERROR)
-            QMessageBox.warning(self, "错误", "无法获取直播流")
+            if live_info.status == LiveStreamStatus.Error and platform == LivePlatform.BiliBili:
+                gui_log("无法获取B站直播流（请检查控制台日志排查：Cookie是否过期、直播间是否限区等）", LogLevel.ERROR)
+                QMessageBox.warning(self, "错误", "无法获取B站直播流\n请检查控制台日志排查：Cookie是否过期、直播间是否限区等")
+            else:
+                gui_log("无法获取直播流", LogLevel.ERROR)
+                QMessageBox.warning(self, "错误", "无法获取直播流")
             return
         
         self.current_stream_url = live_info.link
@@ -1521,6 +1501,11 @@ class MainWindow(QMainWindow):
         elif "config" in filepath:
             self.config.reload()
 
+    def show_cookie_refresh_dialog(self):
+        """打开 Cookie 刷新弹窗"""
+        dialog = CookieRefreshDialog(self)
+        dialog.exec()
+
     def check_for_updates(self):
         """检查更新"""
         from utils.update import check_for_updates
@@ -1620,16 +1605,7 @@ class MainWindow(QMainWindow):
         changelog.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         changelog.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         changelog.viewport().setCursor(Qt.CursorShape.ArrowCursor)
-        changelog.setHtml("""
-            <h3>v1.0.2 (2026-05)</h3>
-            <ul>
-                <li>支持验证码登录</li>
-                <li>修复了二维码登录显示decode err response body error: unexpected end of JSON input的问题</li>
-                <li>当前版本验证码暂不支持HarmonyOS及IOS，后续修复</li>
-            </ul>
-            <hr>
-            <p style='color:gray;font-size:12px;'>本项目为参考项目改进而来，修复了已知 BUG。</p>
-        """)
+        changelog.setHtml(self.CHANGELOG_HTML)
         layout.addWidget(changelog)
 
         dialog.exec()
@@ -1637,7 +1613,7 @@ class MainWindow(QMainWindow):
     def open_github_issues(self):
         """打开GitHub Issues"""
         import webbrowser
-        webbrowser.open("https://github.com/Theresa-0328/MHY_Scanner/issues")
+        webbrowser.open(self.GITHUB_ISSUES_URL)
     
     def open_homepage(self):
         """打开项目主页"""

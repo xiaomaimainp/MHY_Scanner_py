@@ -7,4 +7,3 @@ from .login_window import LoginWindow
 from .config_editor import ConfigEditor
 from .account_manager import AccountManager
 from .add_account_dialog import AddAccountDialog
-from .geetest_verify import GeeTestVerifyDialog, verify_geetest, build_aigis_header

@@ -81,9 +81,6 @@ class LoginWindow(QDialog):
     # 短信登录结果信号（与login_success一致）
     sms_login_result = pyqtSignal(bool, str, str, str, str)  # (success, msg, uid, token, mid)
 
-    # GeeTest 滑块验证信号（从后台线程转发到主线程）
-    geetest_needed = pyqtSignal(str, object)  # (phone, extra_dict)
-
     # 二维码信号
     qr_fetched = pyqtSignal(str, str)  # (url, ticket)
     qr_fetch_error = pyqtSignal(str)   # (error_message)
@@ -106,7 +103,6 @@ class LoginWindow(QDialog):
         self.current_ticket = ""
         self.remaining_seconds = 0
         self.sms_action_type = ""
-        self.sms_aigis = ""
 
         self.init_ui()
 
@@ -120,9 +116,6 @@ class LoginWindow(QDialog):
 
         # 连接B站登录信号
         self.bh3_login_result.connect(self._on_bh3_login_result)
-
-        # 连接 GeeTest 滑块信号（后台线程 → 主线程）
-        self.geetest_needed.connect(self._do_geetest_verify)
 
         # 移动窗口到鼠标当前位置的水平居中处
         self.move_to_mouse_center()
@@ -399,14 +392,7 @@ class LoginWindow(QDialog):
 
             if retcode == 0:
                 self.sms_action_type = action_type
-                self.sms_aigis = ""
                 self.sms_send_result.emit(True, action_type)
-            elif retcode == -3101:
-                gui_log(f"发送短信需要滑块验证: {extra}")
-                # 存下数据，通过 sms_send_result 转发到主线程（这个信号已被验证可靠）
-                self._geetest_phone = phone
-                self._geetest_extra = extra
-                self.sms_send_result.emit(False, "__GEETEST__")
             elif retcode == -3002:
                 self.sms_send_result.emit(False, f"发送过于频繁: {action_type}")
             else:
@@ -424,79 +410,11 @@ class LoginWindow(QDialog):
             self.update_sms_timer()
             gui_log("验证码已发送")
             QMessageBox.information(self, "提示", "验证码已发送")
-        elif message == "__GEETEST__":
-            # 需要滑块验证：从主线程直接调用滑块验证（通过已有的可靠信号路径到达）
-            phone = getattr(self, "_geetest_phone", "")
-            extra = getattr(self, "_geetest_extra", {})
-            self._do_geetest_verify(phone, extra)
-        elif message == "__BH3_GEETEST__":
-            # B站需要滑块验证
-            extra = getattr(self, "_geetest_extra", {})
-            self._do_bh3_geetest(extra)
         else:
             self.sms_send_btn.setText("发送")
             self.sms_send_btn.setEnabled(True)
             gui_log(f"短信发送失败: {message}", LogLevel.WARN)
             QMessageBox.warning(self, "错误", message)
-
-    def _do_geetest_verify(self, phone: str, extra: dict):
-        """
-        执行 GeeTest 滑块验证并重试短信发送
-        
-        滑块验证在主线程执行（需要用户交互）。
-        验证成功后，在后台线程携带 X-Rpc-Aigis 头重新请求短信。
-        """
-        from ui.geetest_verify import verify_geetest, build_aigis_header
-
-        gt = extra.get("gt", "")
-        challenge = extra.get("challenge", "")  # v4 可能没有 challenge
-        session_id = extra.get("session_id", "")
-
-        gui_log(f"[滑块验证] gt={gt[:16]}... session={session_id[:8]}... v4={extra.get('use_v4', False)}", LogLevel.DEBUG)
-        self.sms_send_btn.setText("验证中...")
-
-        if not gt:
-            self.sms_send_btn.setText("发送")
-            self.sms_send_btn.setEnabled(True)
-            gui_log("滑块验证参数无效，请使用扫码登录", LogLevel.WARN)
-            QMessageBox.warning(self, "错误", "滑块验证参数无效，请使用扫码登录")
-            return
-
-        # 显示滑块验证对话框（阻塞主线程，等待用户完成）
-        try:
-            ok, geetest_result = verify_geetest(gt, challenge, self)
-        except Exception as e:
-            error(f"滑块验证异常: {e}\n{traceback.format_exc()}")
-            self.sms_send_btn.setText("发送")
-            self.sms_send_btn.setEnabled(True)
-            QMessageBox.warning(self, "错误", f"滑块验证加载失败:\n{e}\n\n请使用扫码登录")
-            return
-
-        if not ok or not geetest_result:
-            self.sms_send_btn.setText("发送")
-            self.sms_send_btn.setEnabled(True)
-            gui_log("滑块验证未完成", LogLevel.WARN)
-            return
-
-        # 验证成功，构建 X-Rpc-Aigis 头（新版格式: session_id;base64）
-        aigis_header = build_aigis_header(session_id, geetest_result)
-
-        # 在后台线程中携带 aigis 头重试发送短信
-        def retry_send():
-            retcode, action_type, retry_extra = self.api.send_sms_code(phone, aigis=aigis_header)
-
-            if retcode == 0:
-                self.sms_action_type = action_type
-                self.sms_aigis = ""
-                self.sms_send_result.emit(True, action_type)
-            elif retcode == -3101:
-                gui_log(f"二次滑块验证: {retry_extra}", LogLevel.WARN)
-                self.sms_send_result.emit(False, "验证未通过，请重试或使用扫码登录")
-            else:
-                self.sms_send_result.emit(False,
-                    f"发送失败 (code={retcode})\n\n提示：可能触发了风控，请等待1-2分钟后重试，或使用扫码登录")
-
-        threading.Thread(target=retry_send, daemon=True).start()
 
     def update_sms_timer(self):
         """更新短信倒计时"""
@@ -523,7 +441,7 @@ class LoginWindow(QDialog):
 
         def do_login():
             retcode, v2_token, uid, mid = self.api.login_by_sms(
-                phone, code, getattr(self, "sms_action_type", ""), getattr(self, "sms_aigis", "")
+                phone, code, getattr(self, "sms_action_type", "")
             )
 
             if retcode == 0:
@@ -825,21 +743,6 @@ class LoginWindow(QDialog):
 
             if code == 0 and data.get("access_key"):
                 self.bh3_login_result.emit(True, "", str(data["uid"]), data["access_key"], "BiliBili")
-            elif code == 200000:
-                # 需要图形验证码（与 C++ BSGameSDK 一致，code==200000 对应需要验证码）
-                sdk = BSGameSDK()
-                geetest = sdk.captcha()
-                if not geetest or not geetest.get("gt"):
-                    self.bh3_login_result.emit(False, "获取验证码失败，请重试", "", "", "")
-                    return
-                # 通过 sms_send_result -> __GEETEST__ 路径转发到主线程
-                self._geetest_phone = ""  # 非短信场景
-                self._geetest_extra = {
-                    "gt": geetest["gt"],
-                    "challenge": geetest["challenge"],
-                    "session_id": geetest["session_id"],
-                }
-                self.sms_send_result.emit(False, "__BH3_GEETEST__")
             else:
                 self.bh3_login_result.emit(False, f"登录失败 (code={code}): {message}", "", "", "")
 
@@ -858,57 +761,6 @@ class LoginWindow(QDialog):
         else:
             gui_log(f"B站登录失败: {msg}", LogLevel.WARN)
             QMessageBox.warning(self, "错误", msg)
-
-    def _do_bh3_geetest(self, extra: dict):
-        """B站 GeeTest 滑块验证（参考 C++ WindowLogin CaptchaCaptcha 流程）"""
-        from ui.geetest_verify import verify_geetest
-
-        gt = extra.get("gt", "")
-        challenge = extra.get("challenge", "")
-        session_id = extra.get("session_id", "")
-
-        gui_log(f"[B站滑块验证] gt={gt[:16]}... session={session_id[:8]}...", LogLevel.DEBUG)
-        self.bh3_login_btn.setText("验证中...")
-
-        if not gt:
-            self.bh3_login_btn.setText("登录")
-            self.bh3_login_btn.setEnabled(True)
-            QMessageBox.warning(self, "错误", "滑块验证参数无效\n请使用扫码登录")
-            return
-
-        try:
-            ok, geetest_result = verify_geetest(gt, challenge, self)
-        except Exception as e:
-            error(f"B站滑块验证异常: {e}\n{traceback.format_exc()}")
-            self.bh3_login_btn.setText("登录")
-            self.bh3_login_btn.setEnabled(True)
-            return
-
-        if not ok or not geetest_result:
-            self.bh3_login_btn.setText("登录")
-            self.bh3_login_btn.setEnabled(True)
-            gui_log("B站滑块验证未完成", LogLevel.WARN)
-            return
-
-        # 验证成功，用 validate 重试登录
-        def retry_login():
-            from api import BSGameSDK
-            sdk = BSGameSDK()
-            code, message, data = sdk.login(
-                self._bh3_account, self._bh3_password,
-                gt_user=session_id,
-                challenge=geetest_result.get("geetest_challenge", ""),
-                validate=geetest_result.get("geetest_validate", ""),
-            )
-
-            if code == 0 and data.get("access_key"):
-                self.bh3_login_result.emit(True, "", str(data["uid"]), data["access_key"], "BiliBili")
-            elif code == 200000:
-                self.bh3_login_result.emit(False, "验证未通过，请重试", "", "", "")
-            else:
-                self.bh3_login_result.emit(False, f"登录失败 (code={code}): {message}", "", "", "")
-
-        threading.Thread(target=retry_login, daemon=True).start()
 
     def closeEvent(self, event):
         """窗口关闭"""
