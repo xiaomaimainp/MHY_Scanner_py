@@ -40,59 +40,290 @@ class LiveBili:
 
     API_BASE = "https://api.live.bilibili.com"
 
+    @staticmethod
+    def douyin_qrcode_login() -> bool:
+        """
+        抖音二维码登录。调用抖音 API 生成登录二维码，用户手机抖音APP扫码确认后，
+        自动提取 sessionid / sessionid_ss 等登录态 Cookie，
+        保存到 cookie.json 的 douyin_cookie 字段。
+
+        Returns:
+            True=登录成功, False=失败/超时/取消
+        """
+        import time as _time
+        import uuid as _uuid
+        import random as _rnd
+        import base64 as _b64
+        import json as _json
+
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "sec-ch-ua": (
+                '"Chromium";v="124", "Google Chrome";v="124", '
+                '"Not-A.Brand";v="99"'
+            ),
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+        })
+
+        # ---- 1. 生成 msToken（douyin JS 用 base-36） ----
+        _rand_part = _rnd.random()
+        _rand_s = ""
+        _frac = _rand_part
+        for _ in range(12):
+            _frac = _frac * 36
+            _d = int(_frac)
+            _rand_s += "0123456789abcdefghijklmnopqrstuvwxyz"[_d]
+            _frac -= _d
+        _ts_36 = ""
+        _ts = int(_time.time() * 1000)
+        _rem = _ts
+        for _ in range(10):
+            _rem, _d = divmod(_rem, 36)
+            _ts_36 = "0123456789abcdefghijklmnopqrstuvwxyz"[_d] + _ts_36
+            if _rem == 0:
+                break
+        ms_token = _rand_s + _ts_36
+
+        # ---- 2. 先访问登录页获取真实 passport_csrf_token ----
+        try:
+            resp = session.get(
+                "https://www.douyin.com/passport/login/",
+                headers={"Referer": "https://www.douyin.com/"},
+                timeout=15,
+                allow_redirects=True,
+            )
+        except Exception as e:
+            douyin_log(f"访问抖音登录页失败: {e}", LogLevel.ERROR)
+            return False
+
+        # passport_csrf_token
+        csrf_token = session.cookies.get("passport_csrf_token", "")
+        if not csrf_token:
+            csrf_token = _uuid.uuid4().hex
+            session.cookies.set("passport_csrf_token", csrf_token)
+            douyin_log(f"未获取到 passport_csrf_token，已生成随机 token", LogLevel.INFO)
+
+        if not session.cookies.get("ttwid"):
+            _ttwid_payload = _b64.b64encode(_json.dumps({"uid": _uuid.uuid4().hex}).encode()).decode()
+            session.cookies.set("ttwid", f"ttwid=1%2B{_ttwid_payload}")
+
+        session.cookies.set("msToken", ms_token)
+
+        # ---- 3. 生成登录二维码 ----
+        def _try_get_qr():
+            """尝试不同域名和参数组合获取二维码"""
+            endpoints = [
+                ("https://www.douyin.com/passport/qr/login/get_qrcode/", "https://www.douyin.com/passport/login/"),
+                ("https://sso.douyin.com/passport/qr/login/get_qrcode/", "https://www.douyin.com/"),
+            ]
+            for api_url, ref_url in endpoints:
+                try:
+                    resp = session.get(
+                        api_url,
+                        params={
+                            "aid": "6383",
+                            "service": "https://www.douyin.com",
+                            "need_logo": "false",
+                            "device_platform": "web",
+                            "csrf_token": csrf_token,
+                            "msToken": ms_token,
+                        },
+                        headers={
+                            "Referer": ref_url,
+                            "Origin": "https://www.douyin.com",
+                        },
+                        timeout=15,
+                    )
+                    data = resp.json()
+                    if data.get("message") == "success" and "data" in data:
+                        return data
+                    douyin_log(f"API {api_url.split('/')[2]} 返回: {data.get('data', {}).get('description', data.get('message', 'unknown'))}", LogLevel.WARN)
+                except Exception as e:
+                    douyin_log(f"API {api_url.split('/')[2]} 异常: {e}", LogLevel.WARN)
+            return None
+
+        data = _try_get_qr()
+        if data is None:
+            douyin_log("所有 API 域名都返回了错误", LogLevel.ERROR)
+            return False
+        qr_data = data["data"]
+        qr_url = qr_data.get("qrcode", "")
+        qr_token = qr_data.get("token", "")
+        if not qr_url or not qr_token:
+            douyin_log(f"二维码数据不完整: qrcode={bool(qr_url)}, token={bool(qr_token)}", LogLevel.ERROR)
+            return False
+
+        # ---- 3. 显示二维码 ----
+        bili_log("=" * 50, LogLevel.WARN, console_only=True)
+        bili_log("请使用 抖音APP 扫描下方二维码登录", LogLevel.WARN, console_only=True)
+
+        try:
+            import qrcode as _qr
+            qr = _qr.QRCode(border=1)
+            qr.add_data(qr_url)
+            qr.make(fit=True)
+            qr.print_ascii(invert=True)
+        except ImportError:
+            pass
+
+        bili_log(f"二维码链接: {qr_url}", LogLevel.WARN, console_only=True)
+        bili_log("=" * 50, LogLevel.WARN, console_only=True)
+
+        # ---- 4. 轮询扫码状态 ----
+        bili_log("等待扫码...", LogLevel.WARN, console_only=True)
+        max_wait = 300
+        started = _time.time()
+        last_status = None
+
+        while _time.time() - started < max_wait:
+            try:
+                resp = session.post(
+                    "https://www.douyin.com/passport/qr/login/check_qrcode/",
+                    data={
+                        "csrf_token": csrf_token,
+                        "token": qr_token,
+                        "service": "https://www.douyin.com",
+                    },
+                    timeout=15,
+                )
+                poll = resp.json()
+                status = poll.get("data", {}).get("status", "")
+                extra = poll.get("data", {})
+
+                if status == "2":
+                    bili_log("扫码登录成功！正在提取 Cookie...", LogLevel.WARN, console_only=True)
+                    break
+                elif status == "1":
+                    bili_log("二维码已过期，请重新获取", LogLevel.ERROR, console_only=True)
+                    return False
+                elif status == "4" and last_status != "4":
+                    bili_log("已扫码，请在手机上确认登录...", LogLevel.WARN, console_only=True)
+                elif status == "3" and last_status != "3":
+                    pass  # waiting for scan
+
+                last_status = status
+                _time.sleep(2)
+            except Exception as e:
+                douyin_log(f"轮询登录状态异常: {e}", LogLevel.WARN)
+                _time.sleep(2)
+        else:
+            bili_log("登录超时（5分钟未扫码确认）", LogLevel.ERROR, console_only=True)
+            return False
+
+        # ---- 5. 提取登录态 Cookie ----
+        auth = {}
+        key_fields = (
+            "sessionid", "sessionid_ss", "passport_csrf_token",
+            "sid_guard", "uid_tt", "sid_tt",
+            "sessionid_ss", "odin_tt",
+            "n_mh", "sid_ucp_v1", "ssid_ucp_v1",
+        )
+        for ck, cv in session.cookies.items():
+            if ck in key_fields and cv:
+                auth[ck] = cv
+        # also include any douyin-related cookies
+        for ck, cv in session.cookies.items():
+            if ("session" in ck.lower() or "sid_" in ck.lower() or "uid" in ck.lower()) and ck not in auth:
+                if cv:
+                    auth[ck] = cv
+
+        if not auth.get("sessionid"):
+            # try sessionid_ss as fallback
+            if not auth.get("sessionid_ss"):
+                douyin_log(f"登录成功但未获取到关键Cookie，已获取: {list(session.cookies.keys())}", LogLevel.ERROR)
+                return False
+
+        user_cookie_str = "; ".join(f"{k}={v}" for k, v in auth.items())
+
+        # ---- 6. 保存到 cookie.json ----
+        try:
+            from core.config import ConfigManager
+            ConfigManager().update_douyin_cookie(user_cookie_str)
+            bili_log(f"抖音登录态已保存到 douyin_cookie: {list(auth.keys())}", LogLevel.WARN, console_only=True)
+            return True
+        except Exception as e:
+            douyin_log(f"保存登录 Cookie 失败: {e}", LogLevel.ERROR)
+            return False
+
     def __init__(self, room_id: str):
         self.room_id = room_id
         self.real_room_id = ""
 
     @staticmethod
-    def _generate_default_cookies() -> str:
+    def _get_user_auth_cookies() -> Dict[str, str]:
         """
-        本地动态生成B站所需的全套设备指纹Cookie（仿浏览器行为）。
-        B站绝大部分Cookie由JavaScript生成，不通过HTTP Set-Cookie，
-        因此直接在本地生成，无需依赖网络请求。
+        尝试从配置/环境变量获取用户提供的已登录B站Cookie。
+        仅提取身份认证相关的字段（SESSDATA, bili_jct, DedeUserID 等），
+        用于补充HTTP获取的游客Cookie，使其具备登录态。
+        
+        优先级:
+        1. 环境变量 BILIBILI_SESSDATA（最简单，直接设置SESSDATA值）
+        2. 环境变量 BILIBILI_COOKIE（完整的 cookie 字符串）
+        3. cookie.json 中的 bilibili_cookie 字段（从中提取 SESSDATA 等登录态）
         """
-        import uuid
-        import time
-        import random
+        import os
+        auth_cookies = {}
 
-        _uid = str(uuid.uuid4()).upper()
-        _ts = str(int(time.time() * 1000))
+        # 方式1: 环境变量直接设置 SESSDATA
+        sessdata = os.environ.get("BILIBILI_SESSDATA", "").strip()
+        if sessdata:
+            auth_cookies["SESSDATA"] = sessdata
+            bili_log(f"从环境变量 BILIBILI_SESSDATA 加载了 SESSDATA", LogLevel.INFO)
+            return auth_cookies
 
-        cookies = {
-            "buvid3": _uid + "infoc",
-            "buvid4": str(uuid.uuid4()).upper(),
-            "b_nut": _ts,
-            "_uuid": uuid.uuid4().hex.upper()[:32],
-            "rpdid": "|" + "|".join(
-                hex(random.randint(0, 0xFFFFFFFF))[2:].zfill(8) for _ in range(5)
-            ),
-            "buvid_fp": str(random.randint(1000000000000, 9999999999999)),
-            "b_lsid": str(random.randint(1000000000000, 9999999999999)) + "_" + _ts,
-            "enable_web_push": "DISABLE",
-            "header_theme_version": "CLOSE",
-            "home_feed_column": "5",
-            "browser_resolution": "1920x1080",
-            "CURRENT_FNVAL": "4048",
-            "CURRENT_QUALITY": "112",
-            "bp_t_offset_": "",
-        }
-        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
-        return cookie_str
+        # 方式2: 环境变量设置完整 cookie
+        env_cookie = os.environ.get("BILIBILI_COOKIE", "").strip()
+        if env_cookie:
+            for part in env_cookie.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    if k in ("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid"):
+                        auth_cookies[k] = v
+            if auth_cookies:
+                bili_log(f"从环境变量 BILIBILI_COOKIE 加载了认证Cookie: {list(auth_cookies.keys())}", LogLevel.INFO)
+                return auth_cookies
+
+        # 方式3: cookie.json 中的 bilibili_cookie 字段
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager().config
+            user_cookie = getattr(cfg, 'bilibili_cookie', '') or ''
+            if user_cookie.strip():
+                for part in user_cookie.split(";"):
+                    part = part.strip()
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        k = k.strip()
+                        v = v.strip()
+                        if k in ("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid"):
+                            auth_cookies[k] = v
+                if auth_cookies:
+                    bili_log(f"从配置文件加载了认证Cookie: {list(auth_cookies.keys())}", LogLevel.INFO)
+        except Exception:
+            pass
+
+        return auth_cookies
 
     @staticmethod
     def _refresh_session_cookies() -> str:
         """
-        尝试通过HTTP获取B站可能下发的少数Set-Cookie，
-        成功则与本地生成的Cookie合并返回；
-        失败则完全使用本地生成的Cookie（全自动，不阻塞）。
+        通过访问B站页面获取新鲜 Session Cookie（完全通过HTTP，不本地生成）。
+        与抖音一致：访问首页和API，从 Set-Cookie 提取所有字段。
+        失败返回空字符串。
         """
-        local_cookies = LiveBili._generate_default_cookies()
-        local_dict = {}
-        for part in local_cookies.split("; "):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                local_dict[k] = v
-
         try:
             session = requests.Session()
             session.headers.update({
@@ -103,8 +334,6 @@ class LiveBili:
                 ),
                 "Referer": "https://www.bilibili.com/",
             })
-
-            http_count = 0
             try:
                 session.get("https://api.bilibili.com/x/frontend/finger/spi", timeout=8)
             except Exception:
@@ -114,64 +343,259 @@ class LiveBili:
             except Exception:
                 pass
 
-            for ck, cv in session.cookies.items():
-                if cv:
-                    local_dict[ck] = cv
-                    http_count += 1
+            extracted = dict(session.cookies.items())
+            if not extracted:
+                bili_log("自动刷新Cookie：未收到任何 Set-Cookie", LogLevel.WARN, console_only=True)
+                return ""
 
-            merged = "; ".join(f"{k}={v}" for k, v in local_dict.items())
-            if http_count > 0:
-                bili_log(
-                    f"B站Cookie已就绪: 本地生成{len(local_dict) - http_count}个 + HTTP获取{http_count}个",
-                    LogLevel.WARN, console_only=True,
-                )
-            else:
-                bili_log(
-                    f"B站Cookie已就绪: 全部本地生成（{len(local_dict)}个字段）",
-                    LogLevel.WARN, console_only=True,
-                )
-            return merged
-        except Exception:
-            bili_log(
-                f"B站Cookie已就绪: 全部本地生成（{len(local_dict)}个字段，HTTP获取失败）",
-                LogLevel.WARN, console_only=True,
-            )
-            return local_cookies
+            cookie_str = "; ".join(f"{k}={v}" for k, v in extracted.items())
+            bili_log(f"自动刷新Cookie成功，获取到 {len(extracted)} 个字段: {cookie_str[:200]}...", LogLevel.WARN, console_only=True)
+            return cookie_str
+        except Exception as e:
+            bili_log(f"自动刷新Cookie失败: {e}", LogLevel.WARN, console_only=True)
+            return ""
+
+    # 静态默认字段（不随会话变化的常量，对标抖音 _DEFAULT_COOKIE）
+    _STATIC_DEFAULTS = (
+        "enable_web_push=DISABLE; "
+        "header_theme_version=CLOSE; "
+        "home_feed_column=5; "
+        "browser_resolution=1920x1080; "
+        "CURRENT_FNVAL=4048; "
+        "CURRENT_QUALITY=112; "
+        "bp_t_offset_="
+    )
+
+    @staticmethod
+    def _generate_device_fingerprint() -> str:
+        """生成本会话设备指纹Cookie（buvid4, _uuid, rpdid 等 JS 生成字段）"""
+        import uuid as _uuid, time as _time, random as _random
+        uid = str(_uuid.uuid4()).upper()
+        ts = str(int(_time.time() * 1000))
+        fp = {
+            "buvid3": uid + "infoc",
+            "buvid4": str(_uuid.uuid4()).upper(),
+            "b_nut": ts,
+            "_uuid": _uuid.uuid4().hex.upper()[:32],
+            "rpdid": "|" + "|".join(
+                hex(_random.randint(0, 0xFFFFFFFF))[2:].zfill(8) for _ in range(5)
+            ),
+            "buvid_fp": str(_random.randint(1000000000000, 9999999999999)),
+            "b_lsid": str(_random.randint(1000000000000, 9999999999999)) + "_" + ts,
+        }
+        return "; ".join(f"{k}={v}" for k, v in fp.items())
+
+    @classmethod
+    def _merge_with_user_auth(cls, base_cookie: str) -> str:
+        """将用户登录态Cookie（SESSDATA等）合并到基础Cookie中，不覆盖已有同名字段"""
+        user_auth = LiveBili._get_user_auth_cookies()
+        if not user_auth:
+            return base_cookie
+
+        parts = re.split(r';\s*', base_cookie) if base_cookie.strip() else []
+        existing_keys = set(p.split('=', 1)[0] for p in parts if '=' in p)
+
+        for k, v in user_auth.items():
+            if k not in existing_keys:
+                parts.append(f"{k}={v}")
+
+        merged = "; ".join(parts)
+        if user_auth:
+            bili_log(f"已合并用户登录态Cookie: {list(user_auth.keys())}", LogLevel.DEBUG)
+        return merged or base_cookie
 
     @classmethod
     def _get_cookie(cls) -> str:
         """
-        全自动获取B站 Cookie：
-        本地动态生成设备指纹 + 尝试HTTP补充 → 始终有可用Cookie，永不返回空。
+        获取B站 Cookie（不自动刷新，仅手动刷新时更新）：
+        构建完整 Cookie = 设备指纹 + 静态默认值 + 配置中保存的登录态（SESSDATA等）
+        已保存字段优先覆盖同名的设备指纹/静态默认值
         """
-        fresh = cls._refresh_session_cookies()
-        if fresh:
+        # 1. 读取配置中已保存的 Cookie（由手动扫码登录写入，含 SESSDATA 等）
+        saved = ""
+        try:
+            from core.config import ConfigManager
+            cfg = ConfigManager().config
+            saved = getattr(cfg, 'bilibili_cookie', '') or ''
+        except Exception:
+            pass
+
+        # 2. 构建完整基础 Cookie：设备指纹 + 静态默认值
+        fp = cls._generate_device_fingerprint()
+        base = fp + "; " + cls._STATIC_DEFAULTS
+
+        if saved.strip():
+            # 已保存的字段优先覆盖基础 Cookie 中的同名字段
+            saved_keys = set(p.split('=', 1)[0] for p in re.split(r';\s*', saved) if '=' in p)
+            base_parts = [p for p in re.split(r';\s*', base) if '=' in p and p.split('=', 1)[0] not in saved_keys]
+            merged = "; ".join(base_parts) + "; " + saved
+        else:
+            merged = base
+
+        # 3. 合并环境变量中可能的额外登录态
+        return cls._merge_with_user_auth(merged)
+
+    @staticmethod
+    def bilibili_qrcode_login() -> bool:
+        """
+        B站二维码登录。调用 B站 API 生成登录二维码，用户手机扫码确认后，
+        自动提取 SESSDATA / bili_jct / DedeUserID 等登录态 Cookie，
+        保存到 cookie.json 的 bilibili_cookie 字段。
+
+        Returns:
+            True=登录成功, False=失败/超时/取消
+        """
+        import time as _time
+
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+        })
+
+        # ---- 1. 生成二维码 ----
+        try:
+            resp = session.get(
+                "https://passport.bilibili.com/x/passport-login/web/qrcode/generate",
+                timeout=10,
+            )
+            data = resp.json()
+            if data.get("code") != 0:
+                bili_log(f"生成登录二维码失败: {data}", LogLevel.ERROR)
+                return False
+            qr_url = data["data"]["url"]
+            qr_key = data["data"]["qrcode_key"]
+        except Exception as e:
+            bili_log(f"获取登录二维码异常: {e}", LogLevel.ERROR)
+            return False
+
+        # ---- 2. 显示二维码 ----
+        bili_log("=" * 50, LogLevel.WARN, console_only=True)
+        bili_log("请使用 B站APP 扫描下方二维码登录", LogLevel.WARN, console_only=True)
+
+        # 尝试终端 ASCII 二维码
+        try:
+            import qrcode as _qr
+            qr = _qr.QRCode(border=1)
+            qr.add_data(qr_url)
+            qr.make(fit=True)
+            qr.print_ascii(invert=True)
+        except ImportError:
+            pass
+
+        bili_log(f"二维码链接: {qr_url}", LogLevel.WARN, console_only=True)
+        bili_log("(安装 qrcode[pil] 可在终端显示二维码图: pip install qrcode[pil])", LogLevel.INFO, console_only=True)
+        bili_log("=" * 50, LogLevel.WARN, console_only=True)
+
+        # ---- 3. 轮询扫码状态（B站二维码有效期 180s） ----
+        bili_log("等待扫码...", LogLevel.WARN, console_only=True)
+        max_wait = 180
+        started = _time.time()
+        last_state = -1
+
+        while _time.time() - started < max_wait:
             try:
-                from core.config import ConfigManager
-                ConfigManager().update_bilibili_cookie(fresh)
-                bili_log("已自动刷新并保存B站Cookie到配置文件", LogLevel.WARN, console_only=True)
-            except Exception:
-                pass
-            return fresh
+                resp = session.get(
+                    "https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
+                    params={"qrcode_key": qr_key},
+                    timeout=10,
+                )
+                poll = resp.json()
+                code = poll.get("data", {}).get("code", poll.get("code", -1))
 
-        # 网络完全不可用时的最终兜底
-        fallback = cls._generate_default_cookies()
-        bili_log("使用本地生成B站Cookie（网络不可用）", LogLevel.WARN, console_only=True)
-        return fallback
+                if code == 0:
+                    bili_log("扫码登录成功！正在提取 Cookie...", LogLevel.WARN, console_only=True)
+                    break
+                elif code == 86038:
+                    bili_log("二维码已过期，请重新获取", LogLevel.ERROR, console_only=True)
+                    return False
+                elif code == 86090 and last_state != 86090:
+                    bili_log("已扫码，请在手机上确认登录...", LogLevel.WARN, console_only=True)
+                elif code == 86101 and last_state != 86101:
+                    pass  # 等待扫码，不重复输出
 
-    def _get_stream_url(self, params: dict) -> str:
+                last_state = code
+                _time.sleep(2)
+            except Exception as e:
+                bili_log(f"轮询登录状态异常: {e}", LogLevel.WARN)
+                _time.sleep(2)
+        else:
+            bili_log("登录超时（3分钟未扫码确认）", LogLevel.ERROR, console_only=True)
+            return False
+
+        # ---- 4. 提取登录态 Cookie ----
+        auth = {}
+        for ck, cv in session.cookies.items():
+            if ck in ("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid"):
+                if cv:
+                    auth[ck] = cv
+
+        if not auth.get("SESSDATA"):
+            bili_log("登录成功但未获取到 SESSDATA，请重试", LogLevel.ERROR)
+            return False
+
+        user_cookie_str = "; ".join(f"{k}={v}" for k, v in auth.items())
+
+        # ---- 5. 保存到 cookie.json 的 bilibili_cookie ----
+        try:
+            from core.config import ConfigManager
+            ConfigManager().update_bilibili_cookie(user_cookie_str)
+            bili_log(f"B站登录态已保存到 bilibili_cookie: {list(auth.keys())}", LogLevel.WARN, console_only=True)
+        except Exception as e:
+            bili_log(f"保存登录 Cookie 失败: {e}", LogLevel.ERROR)
+            return False
+
+        return True
+
+    def _get_stream_url(self, params: Dict[str, str]) -> str:
         """
         从 getRoomPlayInfo 响应中提取拼接流URL
         """
         url = f"{self.API_BASE}/xlive/web-room/v2/index/getRoomPlayInfo"
         try:
             cookie = self._get_cookie()
-            headers = {"Cookie": cookie} if cookie else {}
+            headers = {
+                "Cookie": cookie,
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://live.bilibili.com/",
+                "Origin": "https://live.bilibili.com",
+            }
             resp = requests.get(url, params=params, headers=headers, timeout=10)
             if resp.status_code != 200 or not resp.text:
+                bili_log(f"getRoomPlayInfo HTTP状态={resp.status_code}, text={resp.text[:200] if resp.text else '(空)'}", LogLevel.WARN)
                 return ""
 
             play_info = resp.json()
+            code = play_info.get("code", -1)
+            msg = play_info.get("message", "")
+            bili_log(f"getRoomPlayInfo API code={code}, message={msg}", LogLevel.DEBUG)
+
+            if code != 0:
+                bili_log(f"getRoomPlayInfo 返回错误码: code={code}, message={msg}", LogLevel.WARN)
+                # 需要登录 → 自动触发二维码登录
+                if code == -101 or "登录" in msg:
+                    bili_log("⚠ B站游客Cookie无法获取直播流", LogLevel.ERROR)
+                    try:
+                        from core.config import ConfigManager
+                        cfg = ConfigManager().config
+                        existing = (getattr(cfg, 'bilibili_cookie', '') or '').strip()
+                        if existing:
+                            bili_log("已有登录态但依然失败，可能是 SESSDATA 已过期，请重新登录", LogLevel.ERROR)
+                        else:
+                            bili_log("未检测到B站登录态，自动尝试二维码登录...", LogLevel.WARN, console_only=True)
+                            if LiveBili.bilibili_qrcode_login():
+                                self._just_logged_in = True
+                    except Exception:
+                        pass
+                return ""
+
             data = play_info.get("data", {})
             playurl_info = data.get("playurl_info", {})
             playurl = playurl_info.get("playurl", {})
@@ -183,12 +607,17 @@ class LiveBili:
                 fmt = format_list[0]
                 codec_list = fmt["codec"]
                 codec = codec_list[0]
-            except (KeyError, IndexError, TypeError):
+            except (KeyError, IndexError, TypeError) as e:
+                bili_log(f"解析流结构失败: {e}, playurl keys={list(playurl.keys()) if isinstance(playurl, dict) else type(playurl).__name__}", LogLevel.WARN)
+                # 输出简要的 playurl 结构帮助调试
+                if isinstance(playurl, dict) and not playurl:
+                    bili_log("playurl 为空字典 —— 大概率是游客Cookie无法获取流，需要登录B站账号", LogLevel.ERROR)
                 return ""
 
             base_url = codec.get("base_url", "")
             url_info_list = codec.get("url_info", [])
             if not url_info_list:
+                bili_log("url_info 为空", LogLevel.WARN)
                 return ""
             extra = url_info_list[0].get("extra", "")
             host = url_info_list[0].get("host", "")
@@ -212,13 +641,31 @@ class LiveBili:
         try:
             # 获取 Cookie（供后续请求使用）
             cookie = self._get_cookie()
-            headers = {"Cookie": cookie} if cookie else {}
+            headers = {
+                "Cookie": cookie,
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                "Referer": "https://live.bilibili.com/",
+                "Origin": "https://live.bilibili.com",
+            } if cookie else {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+            }
 
             # ---- 第1步: room_init 获取房间初始化信息 ----
             room_init_url = f"{self.API_BASE}/room/v1/Room/room_init"
             resp = requests.get(room_init_url, params={"id": self.room_id}, headers=headers, timeout=10)
 
+            bili_log(f"room_init HTTP状态={resp.status_code}, text_len={len(resp.text) if resp.text else 0}", LogLevel.DEBUG)
+
             if resp.status_code != 200 or not resp.text:
+                bili_log(f"room_init 请求失败: status={resp.status_code}, text={'空' if not resp.text else resp.text[:200]}", LogLevel.WARN)
                 info.status = LiveStreamStatus.Error
                 return info
 
@@ -228,10 +675,12 @@ class LiveBili:
 
             # code == 60004 表示直播间不存在
             if code == 60004:
+                bili_log(f"直播间不存在: room_id={self.room_id}", LogLevel.WARN)
                 info.status = LiveStreamStatus.Absent
                 return info
 
             if code != 0:
+                bili_log(f"room_init 返回异常: code={code}, message={room_info.get('message', '')}", LogLevel.WARN)
                 info.status = LiveStreamStatus.Error
                 return info
 
@@ -248,6 +697,8 @@ class LiveBili:
             if "room_id" in data:
                 self.real_room_id = str(data["room_id"])
 
+            bili_log(f"房间在直播 (live_status=1)，开始获取流地址 real_room_id={self.real_room_id}...", LogLevel.DEBUG)
+
             # ---- 第2步: GetLinkByRealRoomID ----
             # C++ 参数: codec=0, format=0,2, only_audio=0, only_video=0, protocol=0,1, qn=10000, room_id
             play_params = {
@@ -261,15 +712,22 @@ class LiveBili:
             }
 
             link = self._get_stream_url(play_params)
+            # 二维码登录成功后自动重试一次
+            if not link and getattr(self, '_just_logged_in', False):
+                self._just_logged_in = False
+                bili_log("登录成功，自动重试获取直播流...", LogLevel.WARN, console_only=True)
+                link = self._get_stream_url(play_params)
             if link:
                 info.status = LiveStreamStatus.Normal
                 info.link = link
             else:
+                bili_log("getRoomPlayInfo 未能获取流地址（可能需要登录或Cookie过期）", LogLevel.WARN)
                 info.status = LiveStreamStatus.Error
 
             return info
 
         except json.JSONDecodeError:
+            bili_log("room_init 响应 JSON 解析失败", LogLevel.WARN)
             info.status = LiveStreamStatus.Error
             return info
         except Exception as e:
@@ -367,6 +825,221 @@ class LiveDouyin:
         "live_can_add_dy_2_desktop=%220%22"
     )
 
+    @staticmethod
+    def douyin_qrcode_login() -> bool:
+        """
+        抖音二维码登录。调用抖音 API 生成登录二维码，用户手机抖音APP扫码确认后，
+        自动提取 sessionid / sessionid_ss 等登录态 Cookie，
+        保存到 cookie.json 的 douyin_cookie 字段。
+
+        Returns:
+            True=登录成功, False=失败/超时/取消
+        """
+        import time as _time
+        import uuid as _uuid
+        import random as _rnd
+        import base64 as _b64
+        import json as _json
+
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "no-cache",
+            "sec-ch-ua": (
+                '"Chromium";v="124", "Google Chrome";v="124", '
+                '"Not-A.Brand";v="99"'
+            ),
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+        })
+
+        # ---- 1. 生成 msToken（douyin JS 用 base-36） ----
+        _rand_part = _rnd.random()
+        _rand_s = ""
+        _frac = _rand_part
+        for _ in range(12):
+            _frac = _frac * 36
+            _d = int(_frac)
+            _rand_s += "0123456789abcdefghijklmnopqrstuvwxyz"[_d]
+            _frac -= _d
+        _ts_36 = ""
+        _ts = int(_time.time() * 1000)
+        _rem = _ts
+        for _ in range(10):
+            _rem, _d = divmod(_rem, 36)
+            _ts_36 = "0123456789abcdefghijklmnopqrstuvwxyz"[_d] + _ts_36
+            if _rem == 0:
+                break
+        ms_token = _rand_s + _ts_36
+
+        # ---- 2. 先访问登录页获取真实 passport_csrf_token ----
+        try:
+            resp = session.get(
+                "https://www.douyin.com/passport/login/",
+                headers={"Referer": "https://www.douyin.com/"},
+                timeout=15,
+                allow_redirects=True,
+            )
+        except Exception as e:
+            douyin_log(f"访问抖音登录页失败: {e}", LogLevel.ERROR)
+            return False
+
+        # passport_csrf_token
+        csrf_token = session.cookies.get("passport_csrf_token", "")
+        if not csrf_token:
+            csrf_token = _uuid.uuid4().hex
+            session.cookies.set("passport_csrf_token", csrf_token)
+            douyin_log(f"未获取到 passport_csrf_token，已生成随机 token", LogLevel.INFO)
+
+        if not session.cookies.get("ttwid"):
+            _ttwid_payload = _b64.b64encode(_json.dumps({"uid": _uuid.uuid4().hex}).encode()).decode()
+            session.cookies.set("ttwid", f"ttwid=1%2B{_ttwid_payload}")
+
+        session.cookies.set("msToken", ms_token)
+
+        # ---- 3. 生成登录二维码 ----
+        def _try_get_qr():
+            """尝试不同域名和参数组合获取二维码"""
+            endpoints = [
+                ("https://www.douyin.com/passport/qr/login/get_qrcode/", "https://www.douyin.com/passport/login/"),
+                ("https://sso.douyin.com/passport/qr/login/get_qrcode/", "https://www.douyin.com/"),
+            ]
+            for api_url, ref_url in endpoints:
+                try:
+                    resp = session.get(
+                        api_url,
+                        params={
+                            "aid": "6383",
+                            "service": "https://www.douyin.com",
+                            "need_logo": "false",
+                            "device_platform": "web",
+                            "csrf_token": csrf_token,
+                            "msToken": ms_token,
+                        },
+                        headers={
+                            "Referer": ref_url,
+                            "Origin": "https://www.douyin.com",
+                        },
+                        timeout=15,
+                    )
+                    data = resp.json()
+                    if data.get("message") == "success" and "data" in data:
+                        return data
+                    douyin_log(f"API {api_url.split('/')[2]} 返回: {data.get('data', {}).get('description', data.get('message', 'unknown'))}", LogLevel.WARN)
+                except Exception as e:
+                    douyin_log(f"API {api_url.split('/')[2]} 异常: {e}", LogLevel.WARN)
+            return None
+
+        data = _try_get_qr()
+        if data is None:
+            douyin_log("所有 API 域名都返回了错误", LogLevel.ERROR)
+            return False
+        qr_data = data["data"]
+        qr_url = qr_data.get("qrcode", "")
+        qr_token = qr_data.get("token", "")
+        if not qr_url or not qr_token:
+            douyin_log(f"二维码数据不完整: qrcode={bool(qr_url)}, token={bool(qr_token)}", LogLevel.ERROR)
+            return False
+
+        # ---- 3. 显示二维码 ----
+        bili_log("=" * 50, LogLevel.WARN, console_only=True)
+        bili_log("请使用 抖音APP 扫描下方二维码登录", LogLevel.WARN, console_only=True)
+
+        try:
+            import qrcode as _qr
+            qr = _qr.QRCode(border=1)
+            qr.add_data(qr_url)
+            qr.make(fit=True)
+            qr.print_ascii(invert=True)
+        except ImportError:
+            pass
+
+        bili_log(f"二维码链接: {qr_url}", LogLevel.WARN, console_only=True)
+        bili_log("=" * 50, LogLevel.WARN, console_only=True)
+
+        # ---- 4. 轮询扫码状态 ----
+        bili_log("等待扫码...", LogLevel.WARN, console_only=True)
+        max_wait = 300
+        started = _time.time()
+        last_status = None
+
+        while _time.time() - started < max_wait:
+            try:
+                resp = session.post(
+                    "https://www.douyin.com/passport/qr/login/check_qrcode/",
+                    data={
+                        "csrf_token": csrf_token,
+                        "token": qr_token,
+                        "service": "https://www.douyin.com",
+                    },
+                    timeout=15,
+                )
+                poll = resp.json()
+                status = poll.get("data", {}).get("status", "")
+                extra = poll.get("data", {})
+
+                if status == "2":
+                    bili_log("扫码登录成功！正在提取 Cookie...", LogLevel.WARN, console_only=True)
+                    break
+                elif status == "1":
+                    bili_log("二维码已过期，请重新获取", LogLevel.ERROR, console_only=True)
+                    return False
+                elif status == "4" and last_status != "4":
+                    bili_log("已扫码，请在手机上确认登录...", LogLevel.WARN, console_only=True)
+                elif status == "3" and last_status != "3":
+                    pass  # waiting for scan
+
+                last_status = status
+                _time.sleep(2)
+            except Exception as e:
+                douyin_log(f"轮询登录状态异常: {e}", LogLevel.WARN)
+                _time.sleep(2)
+        else:
+            bili_log("登录超时（5分钟未扫码确认）", LogLevel.ERROR, console_only=True)
+            return False
+
+        # ---- 5. 提取登录态 Cookie ----
+        auth = {}
+        key_fields = (
+            "sessionid", "sessionid_ss", "passport_csrf_token",
+            "sid_guard", "uid_tt", "sid_tt",
+            "sessionid_ss", "odin_tt",
+            "n_mh", "sid_ucp_v1", "ssid_ucp_v1",
+        )
+        for ck, cv in session.cookies.items():
+            if ck in key_fields and cv:
+                auth[ck] = cv
+        # also include any douyin-related cookies
+        for ck, cv in session.cookies.items():
+            if ("session" in ck.lower() or "sid_" in ck.lower() or "uid" in ck.lower()) and ck not in auth:
+                if cv:
+                    auth[ck] = cv
+
+        if not auth.get("sessionid"):
+            # try sessionid_ss as fallback
+            if not auth.get("sessionid_ss"):
+                douyin_log(f"登录成功但未获取到关键Cookie，已获取: {list(session.cookies.keys())}", LogLevel.ERROR)
+                return False
+
+        user_cookie_str = "; ".join(f"{k}={v}" for k, v in auth.items())
+
+        # ---- 6. 保存到 cookie.json ----
+        try:
+            from core.config import ConfigManager
+            ConfigManager().update_douyin_cookie(user_cookie_str)
+            bili_log(f"抖音登录态已保存到 douyin_cookie: {list(auth.keys())}", LogLevel.WARN, console_only=True)
+            return True
+        except Exception as e:
+            douyin_log(f"保存登录 Cookie 失败: {e}", LogLevel.ERROR)
+            return False
+
     def __init__(self, room_id: str):
         self.room_id = room_id
 
@@ -407,45 +1080,21 @@ class LiveDouyin:
     @classmethod
     def _get_cookie(cls) -> str:
         """
-        获取抖音 Cookie，按优先级：
-        1. 自动刷新（访问 live.douyin.com 获取新鲜 ttwid）→ 成功则保存并返回
-        2. config.json 中上次自动刷新保存的 douyin_cookie（网络异常等降级）
-        3. 内置默认 Cookie（最终兜底）
+        获取抖音 Cookie（不自动刷新，仅手动刷新时更新）：
+        1. config.json 中手动刷新保存的 douyin_cookie
+        2. 内置默认 Cookie（最终兜底）
         """
-        # 1. 优先自动刷新（始终尝试获取最新 Cookie）
-        fresh = cls._refresh_session_cookies()
-        if fresh:
-            # 合并默认 Cookie 中的非 session 字段（设备指纹等长期有效字段）
-            default_parts = re.split(r';\s*', cls._DEFAULT_COOKIE)
-            fresh_keys = set(p.split('=', 1)[0] for p in re.split(r';\s*', fresh) if '=' in p)
-            merged_parts = []
-            for part in default_parts:
-                if '=' in part:
-                    key = part.split('=', 1)[0]
-                    if key not in fresh_keys:
-                        merged_parts.append(part)
-            merged = fresh + "; " + "; ".join(merged_parts)
-
-            try:
-                from core.config import ConfigManager
-                ConfigManager().update_douyin_cookie(merged)
-                douyin_log("已自动刷新并保存Cookie到配置文件", LogLevel.WARN, console_only=True)
-            except Exception:
-                pass
-            return merged
-
-        # 2. 自动刷新失败，尝试读取上次保存的配置（网络异常时可作为降级）
+        # 1. 使用配置中保存的 douyin_cookie（由手动刷新写入）
         try:
             from core.config import ConfigManager
             cfg = ConfigManager().config
             if cfg.douyin_cookie and cfg.douyin_cookie.strip():
-                douyin_log("自动刷新失败，使用配置中上次保存的Cookie", LogLevel.WARN, console_only=True)
                 return cfg.douyin_cookie
         except Exception:
             pass
 
-        # 3. 兜底：使用内置默认 Cookie
-        douyin_log("使用内置默认Cookie（最终兜底）", LogLevel.WARN, console_only=True)
+        # 2. 兜底：使用内置默认 Cookie
+        douyin_log("使用内置默认Cookie（无已保存Cookie）", LogLevel.WARN, console_only=True)
         return cls._DEFAULT_COOKIE
 
     def _get_stream_link_from_response(self, data: dict) -> str:
@@ -639,3 +1288,12 @@ def get_stream_url_for_ffmpeg(platform: LivePlatform, room_id: str) -> Tuple[Liv
         return bili.get_live_stream_url()
     else:
         return LiveStreamStatus.Error, ""
+
+
+if __name__ == "__main__":
+    """独立运行：B站二维码登录工具"""
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    print()
+    LiveBili.bilibili_qrcode_login()
