@@ -1093,25 +1093,21 @@ class MhyApi:
     
     # ========== 短信登录 ==========
     
-    def send_sms_code(self, phone: str, aigis: str = "") -> Tuple[int, str, Dict[str, Any]]:
+    def send_sms_code(self, phone: str) -> Tuple[int, str, Dict[str, Any]]:
         """
         发送短信验证码
         Args:
             phone: 手机号 (如 13800138000 或 +8613800138000)
-            aigis: X-Rpc-Aigis 请求头（完成滑块验证后传入，用于重试）
         Returns: (retcode, action_type, extra_data)
-        extra_data 可能包含 geetest 验证所需参数 (gt, session_id)
         """
         global _last_sms_send_time
         
-        # 非重试请求才检查频率限制（带 aigis 的重试不限制）
-        if not aigis:
-            current_time = time.time()
-            if current_time - _last_sms_send_time < SMS_COOLDOWN_SECONDS:
-                remaining = int(SMS_COOLDOWN_SECONDS - (current_time - _last_sms_send_time))
-                api_log(f"[send_sms_code] 发送过于频繁，请等待 {remaining} 秒后再试", LogLevel.WARN)
-                return -3002, f"发送过于频繁，请等待 {remaining} 秒后再试", {}
-            _last_sms_send_time = current_time
+        current_time = time.time()
+        if current_time - _last_sms_send_time < SMS_COOLDOWN_SECONDS:
+            remaining = int(SMS_COOLDOWN_SECONDS - (current_time - _last_sms_send_time))
+            api_log(f"[send_sms_code] 发送过于频繁，请等待 {remaining} 秒后再试", LogLevel.WARN)
+            return -3002, f"发送过于频繁，请等待 {remaining} 秒后再试", {}
+        _last_sms_send_time = current_time
         
         import requests as req
         
@@ -1137,10 +1133,6 @@ class MhyApi:
         headers = get_sms_request_headers(lifecycle_id)
         headers["Content-Length"] = str(len(body_str))
         
-        if aigis:
-            headers["X-Rpc-Aigis"] = aigis
-            api_log(f"[send_sms_code] 携带 Aigis 头重试", LogLevel.DEBUG)
-        
         api_log(f"[send_sms_code] 发送请求到: {SMS_CREATE}", LogLevel.DEBUG)
         api_log(f"[send_sms_code] 请求体: {body_str}", LogLevel.DEBUG)
         
@@ -1154,33 +1146,13 @@ class MhyApi:
             if retcode == 0:
                 action_type = result.get("data", {}).get("action_type", "")
                 return 0, action_type, {}
-            elif retcode == -3101:
-                # 需要滑块验证 (GeeTest v4)
-                aigis_header = resp.headers.get("X-Rpc-Aigis", "{}")
-                try:
-                    aigis_data = json.loads(aigis_header)
-                except json.JSONDecodeError:
-                    aigis_data = {}
-                captcha_data_str = aigis_data.get("data", "{}")
-                try:
-                    captcha_data = json.loads(captcha_data_str)
-                except json.JSONDecodeError:
-                    captcha_data = {}
-                extra = {
-                    "session_id": aigis_data.get("session_id", ""),
-                    "mmt_type": aigis_data.get("mmt_type", 0),
-                    "gt": captcha_data.get("gt", ""),
-                    "new_captcha": captcha_data.get("new_captcha", 1),
-                    "use_v4": captcha_data.get("use_v4", True),
-                }
-                return -3101, "", extra
             else:
                 return retcode, result.get("message", ""), {}
         except Exception as e:
             api_log(f"[send_sms_code] exception: {e}", LogLevel.ERROR)
             return -1, str(e), {}
     
-    def login_by_sms(self, phone: str, captcha: str, action_type: str = "", aigis: str = "") -> Tuple[int, str, str, str]:
+    def login_by_sms(self, phone: str, captcha: str, action_type: str = "") -> Tuple[int, str, str, str]:
         """
         短信验证码登录
         Returns: (retcode, v2_token, uid, mid)
@@ -1210,8 +1182,6 @@ class MhyApi:
         lifecycle_id = str(uuid.uuid4())
         headers = get_sms_request_headers(lifecycle_id)
         headers["Content-Length"] = str(len(body_str))
-        if aigis:
-            headers["X-Rpc-Aigis"] = aigis
         
         api_log(f"[login_by_sms] 发送请求到: {SMS_LOGIN}", LogLevel.DEBUG)
         api_log(f"[login_by_sms] 请求体: {body_str}", LogLevel.DEBUG)

@@ -22,7 +22,6 @@ BILI_BASE = "https://line1-sdk-center-login-sh.biligame.net"
 BILI_USER_INFO = f"{BILI_BASE}/api/client/user.info"
 BILI_LOGIN = f"{BILI_BASE}/api/client/login"
 BILI_RSA_KEY = f"{BILI_BASE}/api/client/rsa"
-BILI_CAPTCHA = f"{BILI_BASE}/api/client/start_captcha"
 
 # 请求头（与 C++ BSGameSDK.hpp detail::headers 一致）
 _BILI_HEADERS = {
@@ -230,35 +229,3 @@ class BSGameSDK:
         except Exception as e:
             error(f"用户信息失败: {e}\n{traceback.format_exc()}")
             return -1, ""
-
-    # ---- 极验验证 ----
-
-    def captcha(self) -> Dict[str, Any]:
-        """获取极验验证码参数（与 C++ BSGameSDK::BH3::CaptchaCaptcha 一致）。
-
-        Returns: {gt, challenge, session_id, GeeTestType}
-        """
-        import requests as req
-        data = {**_BASE_PARAMS}
-        # captchaParam 不需要 uid/pwd 等
-        for k in ("uid", "pwd", "challenge", "validate",
-                   "seccode", "gt_user_id", "user_id", "captcha_type"):
-            data.pop(k, None)
-        data["imei"] = "227656364311444"
-        body = _set_sign(data)
-
-        try:
-            resp = req.post(BILI_CAPTCHA, data=body, headers=_BILI_HEADERS, timeout=10)
-            captcha = resp.json()
-            if captcha.get("code") != 0:
-                bsgsdk_log(f"captcha 失败: {captcha}", LogLevel.WARN)
-                return {}
-            return {
-                "gt": captcha.get("gt", ""),
-                "challenge": captcha.get("challenge", ""),
-                "session_id": captcha.get("gt_user_id", ""),
-                "GeeTestType": ServerType.BiliBili,
-            }
-        except Exception as e:
-            error(f"极验获取失败: {e}\n{traceback.format_exc()}")
-            return {}
