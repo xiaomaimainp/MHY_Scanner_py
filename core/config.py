@@ -125,8 +125,8 @@ class AppConfig:
     last_platform: int = 0  # 0=抖音, 1=BiliBili
     last_room_id_douyin: str = ""
     last_room_id_bilibili: str = ""
-    douyin_cookie: str = ""        # 抖音直播 Cookie 字符串（空=使用内置默认/自动刷新）
-    bilibili_cookie: str = ""     # B站直播 Cookie 字符串（空=使用自动刷新）
+    douyin_cookie: str = ""         # 抖音直播 Cookie 字符串（空=使用内置默认/自动刷新；扫码登录后含sessionid等）
+    bilibili_cookie: str = ""      # B站直播 Cookie 字符串（空=使用自动刷新；扫码登录后含SESSDATA等登录态）
     default_account_uid: str = ""
     default_account_server_type: int = 1
     log_output_mode: str = "console" if not getattr(sys, 'frozen', False) else "file"  # "console" / "file"
@@ -203,8 +203,10 @@ class AppConfig:
             last_platform=data.get("last_platform", 0),
             last_room_id_douyin=last_room_douyin,
             last_room_id_bilibili=last_room_bili,
-            douyin_cookie=data.get("douyin_cookie", ""),
-            bilibili_cookie=data.get("bilibili_cookie", ""),
+            douyin_cookie=(data.get("douyin_cookie", "")
+                           or data.get("douyin_user_cookie", "")),  # 兼容旧版 douyin_user_cookie
+            bilibili_cookie=(data.get("bilibili_cookie", "")
+                             or data.get("bilibili_user_cookie", "")),  # 兼容旧版 bilibili_user_cookie
             default_account_uid=default_uid,
             default_account_server_type=default_server,
             log_output_mode=data.get("log_output_mode", "console" if not getattr(sys, 'frozen', False) else "file"),
@@ -346,8 +348,10 @@ class ConfigManager:
             try:
                 with open(self._cookie_file, 'r', encoding='utf-8') as f:
                     cookie_data = json.load(f)
-                config.douyin_cookie = cookie_data.get("douyin_cookie", "")
-                config.bilibili_cookie = cookie_data.get("bilibili_cookie", "")
+                config.douyin_cookie = (cookie_data.get("douyin_cookie", "")
+                                         or cookie_data.get("douyin_user_cookie", ""))  # 兼容旧版
+                config.bilibili_cookie = (cookie_data.get("bilibili_cookie", "")
+                                          or cookie_data.get("bilibili_user_cookie", ""))  # 兼容旧版
             except Exception as e:
                 error(f"加载 Cookie 文件失败: {e}\n{traceback.format_exc()}")
 

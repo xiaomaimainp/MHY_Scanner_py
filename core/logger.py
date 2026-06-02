@@ -264,10 +264,6 @@ class Logger:
     def bili_sdk(cls, msg: str, level: int = LogLevel.INFO):
         cls._log(LogLevel.to_name(level), "BSGameSDK", msg)
 
-    @classmethod
-    def geetest(cls, msg: str, level: int = LogLevel.INFO):
-        cls._log(LogLevel.to_name(level), "GeeTest", msg)
-
 
 # ---- 常用快捷函数 ----
 
