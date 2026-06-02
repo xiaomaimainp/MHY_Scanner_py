@@ -3,6 +3,7 @@
 米哈游扫码登录器（Python 版），基于 PyQt6 开发的米哈游游戏账号扫码登录工具。
 
 参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
+在V1.0.1版本修复了下载错误/失败的问题。
 
 > **最新版本**: v1.0.3
 >
