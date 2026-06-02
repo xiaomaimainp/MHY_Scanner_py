@@ -15,7 +15,7 @@ from core.logger import update_log, error, LogLevel
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-VERSION = "1.0.1"
+VERSION = "1.0.3"
 
 class UpdateManager:
     """热更新管理器"""
@@ -189,9 +189,9 @@ class UpdateManager:
             update_log(f"安装程序下载完成: {installer_path} ({downloaded} bytes)")
             update_log("启动安装程序，程序即将退出...")
 
-            # 启动安装程序（/SILENT 静默安装，用户无需操作）
+            # 启动安装程序（交给用户交互安装，不使用静默参数）
             subprocess.Popen(
-                [installer_path, "/SILENT", "/NOCANCEL"],
+                [installer_path],
                 creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0,
             )
             return True
