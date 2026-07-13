@@ -271,6 +271,7 @@ class MainWindow(QMainWindow):
         self.selected_account: Optional[Account] = None
         self._hovered_row = -1  # 悬浮高亮行
         self.should_restart = False  # 是否需要重启
+        self._screen_auto_started = False  # 是否由「监视直播间」联动自动启动的屏幕监视
 
         # 初始化UI
         self.init_ui()
@@ -278,10 +279,9 @@ class MainWindow(QMainWindow):
         # 加载账号
         self.load_accounts()
         
-        # 自动开始检查
-        if self.config.config.auto_start:
-            QTimer.singleShot(500, self.start_screen_scan)
-    
+        # 注意：勾选「启动时自动监视屏幕」不再在启动时自动开始监视屏幕，
+        # 而是改为在按下「监视直播间」时联动同时启动屏幕监视。
+
     def init_ui(self):
         """初始化UI"""
         from PyQt6.QtWidgets import QApplication
@@ -1385,6 +1385,7 @@ class MainWindow(QMainWindow):
         self.scan_status_label.setText("屏幕监视已停止")
         QTimer.singleShot(1000, lambda: self.scan_status_label.clear())
         main_log("屏幕扫描已停止")
+        self._screen_auto_started = False
     
     def toggle_screen_scan(self):
         """切换屏幕扫描状态"""
@@ -1448,10 +1449,22 @@ class MainWindow(QMainWindow):
         
         self.btn_stream_scan.setText("停止监视")
         self.btn_stream_scan.setStyleSheet("background-color: #4CAF50;")
-        self.scan_status_label.setText(f"正在监视直播间 {room_id}...")
+
+        # 若勾选了「启动时自动监视屏幕」，在监视直播间的同时联动启动屏幕监视
+        if self.action_auto_start.isChecked() and not self.is_screen_scanning:
+            self.start_screen_scan()
+            self._screen_auto_started = True
+            self.scan_status_label.setText(f"正在监视直播间 {room_id} + 屏幕...")
+        else:
+            self.scan_status_label.setText(f"正在监视直播间 {room_id}...")
     
     def stop_stream_scan(self):
         """停止直播流扫描"""
+        # 若屏幕监视是由联动自动启动的，则一并停止
+        if self._screen_auto_started and self.is_screen_scanning:
+            self.stop_screen_scan()
+            self._screen_auto_started = False
+
         if self.stream_scanner:
             self.stream_scanner.stop()
             try:
