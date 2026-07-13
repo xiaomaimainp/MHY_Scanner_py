@@ -2,13 +2,21 @@
 
 米哈游扫码登录器（Python 版），基于 PyQt6 开发的米哈游游戏账号扫码登录工具。
 
-参考 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)（C++ 版）改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
+参考   
+[Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)、
+[loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2)和
+[MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
+通过上述三个项目改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
 > **最新版本**: v1.0.4
 >
 > **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
 
-> **项目主页**: [https://github.com/MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
+> **项目主页**: [https://github.com/xiaomaimainp/MHY_Scanner_py](https://github.com/xiaomaimainp/MHY_Scanner_py)
+
+> **备注**：本仓库（fork）仅用于**源代码更新与维护**。相关改动均在与原作者商议、沟通后，由作者推送到主程序。如需直接下载安装包，请前往原作者的 Releases 页面下载，请勿在本 fork 仓库下载安装：
+> [原作者的 Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
+
 首次运行时需要等待一会，以便产生对应的配置文件。
 
 ---
@@ -16,7 +24,7 @@
 ## 功能特性
 
 - **扫码登录**：基于 hoyolab Passport API，米游社 APP 扫码后确认即返回 Token，无需额外转换步骤
-- **短信登录**：支持手机号 + 验证码登录
+- **短信登录**：支持手机号 + 验证码登录（现目前失效）
 - **Cookie 登录**：支持粘贴 SToken Cookie 直接登录（stuid + stoken + mid）
 - **B站崩坏3登录**：支持 BiliBili 服账号密码登录
 - **Cookie 刷新**：支持抖音/B站 Cookie 刷新（设置 → 刷新Cookie）
@@ -62,8 +70,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/your-repo/MHY_Scanner.git
-cd MHY_Scanner
+git clone https://github.com/xiaomaimainp/MHY_Scanner_py.git
+cd MHY_Scanner_py
 ```
 
 ### 2. 安装依赖
@@ -103,7 +111,7 @@ python main.py
 
 > 扫码登录基于 **hoyolab Passport API**（`passport-api.miyoushe.com`），确认登录后 Token 通过 `Set-Cookie` 直接返回，无需额外的 ticket 兑换步骤。
 
-### 短信登录
+### 短信登录（现目前失效）
 
 1. 点击"短信登录"
 2. 输入手机号和验证码
@@ -324,7 +332,7 @@ pyinstaller --onefile --windowed \
   - 保留 `cv2.VideoCapture` 作为系统无 FFmpeg 时的回退路径。
 - **直播流平台头（`ui/main_window.py` `start_stream_scan`）**：当平台为 BiliBili 时，向 `StreamScanner` 写入与 C++ 一致的 `User-Agent` / `Referer` / `Origin` 头。
 - **官服扫码头（`api/api.py` `panda_scan_qrcode`）**：补齐 C++ `PandaScanQRCode` 必发的 `x-rpc-app_id` 与 `x-rpc-device_id` 请求头，使 `panda/qrcode/scan` 返回有效的 `passport_qr_url`。
-
+- **修复启动程序后自动触发监视屏幕**：将「启动时自动监视屏幕」选项的语义改为「监视直播间时同时监视屏幕」。移除了程序启动时自动开始屏幕监视的逻辑（原行为：勾选后重新打开软件即持续监视屏幕）；现在仅当勾选该选项**并**按下「监视直播间」按钮时，才会同时启动屏幕监视与直播间监视。停止直播间监视时也会一并停止由联动自动启动的屏幕监视。重启程序后该选项状态保留，但**不会**在启动时自动触发。
 > 说明：上述改动均为与 C++ `src`（C++ 版 `MHY_Scanner`）逐字段对齐，不涉及账号/登录协议逻辑变更。
 
 ### v1.0.3 (2026-06)

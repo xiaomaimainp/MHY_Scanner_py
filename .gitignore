@@ -205,7 +205,7 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
-
+.vscode/settings.json
 # PyPI configuration file
 .pypirc
 
