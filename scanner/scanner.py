@@ -64,15 +64,29 @@ class ScreenScanner(QThread):
         scanner_log("扫描线程已启动")
 
         with mss.mss() as sct:
-            monitor = sct.monitors[1]
             frame_count = 0
             last_debug_print = 0
             screenshot_ok = False
+            consecutive_failures = 0
 
             while self._running:
                 try:
+                    # mss 会缓存显示器列表；置 None 强制重新枚举，
+                    # 显示器分辨率/缩放/热插拔变化后自动取到最新坐标（自愈）
+                    try:
+                        sct._monitors = None
+                    except AttributeError:
+                        pass
+                    monitor = sct.monitors[1]
+                    monitor = {
+                        "left": int(monitor["left"]),
+                        "top": int(monitor["top"]),
+                        "width": int(monitor["width"]),
+                        "height": int(monitor["height"]),
+                    }
                     # 截取屏幕
                     screenshot = sct.grab(monitor)
+                    consecutive_failures = 0
 
                     # 转换为OpenCV格式并缩放到1280x720（与C++项目一致）
                     img = np.array(screenshot)
@@ -130,8 +144,13 @@ class ScreenScanner(QThread):
                         self.qrcode_detected.emit(qr_data)   # 兼容旧信号
 
                 except Exception as e:
-                    error(f"截图异常: {e}\n{traceback.format_exc()}")
-                    self.scan_error.emit(str(e))
+                    consecutive_failures += 1
+                    # 只在连续失败的第 1 次提示，避免报错刷屏
+                    if consecutive_failures == 1:
+                        error(f"截图异常: {e}\n{traceback.format_exc()}")
+                        self.scan_error.emit(str(e))
+                    # 失败后稍作等待，给系统/显示器恢复时间，避免空转死循环
+                    time.sleep(1.0)
 
         scanner_log("扫描线程已退出")
         self.scan_finished.emit(True)
