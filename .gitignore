@@ -213,7 +213,7 @@ tempCodeRunnerFile.py
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
+/api/api_test.py
 # Streamlit
 .streamlit/secrets.toml
 # 忽略本地生成的配置与账号数据（含敏感凭证 stoken / cookie），防止误提交泄露

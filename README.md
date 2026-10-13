@@ -2,20 +2,19 @@
 
 米哈游扫码登录器（Python 版），基于 PyQt6 开发的米哈游游戏账号扫码登录工具。
 
-参考   
-[Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)、
-[loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2)和
-[MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
+参考[Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)、[loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2)和[MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
 通过上述三个项目改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
 
-> **最新版本**: v1.0.4
+> **最新版本**: v1.0.6
 >
-> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
+> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases)
 
 > **项目主页**: [https://github.com/xiaomaimainp/MHY_Scanner_py](https://github.com/xiaomaimainp/MHY_Scanner_py)
 
-> **备注**：本仓库（fork）仅用于**源代码更新与维护**。相关改动均在与原作者商议、沟通后，由作者推送到主程序。如需直接下载安装包，请前往原作者的 Releases 页面下载，请勿在本 fork 仓库下载安装：
-> [原作者的 Releases](https://github.com/MR-LIYA/MHY_Scanner/releases/download/main/MHY_Scanner_Setup.exe)
+> **备注**：本仓库（fork）的**源代码可直接使用**——`git clone` 后安装依赖（见仓库 `requirements.txt`）并运行 `python main.py` 即可；如需**打包好的安装程序（.exe）**，请前往原作者的 Releases 页面下载，本 fork 不发布安装包：
+> [原作者的 Releases](https://github.com/MR-LIYA/MHY_Scanner/releases)
+
+- **检查更新**：本 fork 改为仅提示新版本并引导前往原作者 Releases 手动下载，不再内置自动下载安装包（安装包仍由原作者仓库提供）。
 
 首次运行时需要等待一会，以便产生对应的配置文件。
 
@@ -111,7 +110,7 @@ python main.py
 
 > 扫码登录基于 **hoyolab Passport API**（`passport-api.miyoushe.com`），确认登录后 Token 通过 `Set-Cookie` 直接返回，无需额外的 ticket 兑换步骤。
 
-### 短信登录（现目前失效）
+### 短信登录（现目前可以正常接收验证码和登录账号，但扫码无法登录）
 
 1. 点击"短信登录"
 2. 输入手机号和验证码
@@ -140,7 +139,7 @@ python main.py
 1. 选择直播平台（B站 / 抖音）
 2. 输入房间号
 3. 点击"开始监视"
-4. 程序会从直播流中检测二维码并自动确认
+4. 程序会从直播流中检测二维码并自动确认（手机短信登录失效）
 
 ### 账号管理
 
@@ -318,27 +317,15 @@ pyinstaller --onefile --windowed \
 
 ---
 
-## 更新日志
+## 主要更新日志
 
-### v1.0.4 (2026-07)
-
-近期改动聚焦「严格对齐 C++ 版 `src` 的 api 与扫码两个模块」，修复了直播流扫码无法打开、以及官服扫码缺头导致校验不稳定的问题。
-
-- **直播流扫描（`scanner/scanner.py` `StreamScanner`）**：
-  - 由原来直接用 `cv2.VideoCapture(url)` 打开直播流，改为**优先使用 FFmpeg 子进程管道**（`ffmpeg -i ... -f rawvideo`）读取帧，对应 C++ `QRCodeForStream::setUrl` / `avformat_open_input` 的实现。
-  - 新增 `set_headers()`，按平台注入 HTTP 头。对齐 C++ `WindowMain::GetStreamLink`：B 站流必须带 `User-Agent` / `Referer: https://live.bilibili.com/` / `Origin: https://live.bilibili.com`，否则 `bilivideo.com` CDN 返回 403、OpenCV 无法打开流（原「无法打开直播流」报错的根因）。
-  - 对齐 C++ 的 FFmpeg 低延迟选项：`rw_timeout=5000000`、`probesize=1024`、`max_delay=0`、`+nobuffer` / `low_delay`。
-  - 帧统一缩放为 1280×720 供二维码检测；停止扫描时正确 `terminate` FFmpeg 子进程，避免残留。
-  - 保留 `cv2.VideoCapture` 作为系统无 FFmpeg 时的回退路径。
-- **直播流平台头（`ui/main_window.py` `start_stream_scan`）**：当平台为 BiliBili 时，向 `StreamScanner` 写入与 C++ 一致的 `User-Agent` / `Referer` / `Origin` 头。
-- **官服扫码头（`api/api.py` `panda_scan_qrcode`）**：补齐 C++ `PandaScanQRCode` 必发的 `x-rpc-app_id` 与 `x-rpc-device_id` 请求头，使 `panda/qrcode/scan` 返回有效的 `passport_qr_url`。
-- **修复启动程序后自动触发监视屏幕**：将「启动时自动监视屏幕」选项的语义改为「监视直播间时同时监视屏幕」。移除了程序启动时自动开始屏幕监视的逻辑（原行为：勾选后重新打开软件即持续监视屏幕）；现在仅当勾选该选项**并**按下「监视直播间」按钮时，才会同时启动屏幕监视与直播间监视。停止直播间监视时也会一并停止由联动自动启动的屏幕监视。重启程序后该选项状态保留，但**不会**在启动时自动触发。
-> 说明：上述改动均为与 C++ `src`（C++ 版 `MHY_Scanner`）逐字段对齐，不涉及账号/登录协议逻辑变更。
-
-### v1.0.3 (2026-06)
-
-- **新增 Cookie 刷新功能**：抖音直接点击刷新即可，B站需扫码登录提取登录态
-- 当前版本验证码暂不支持 HarmonyOS 及 iOS
+- 2026-10-13：更新`scanner/scanner.py` 截图自愈加固
+- 2026-07-14：更新 readme.md 文档
+- 2026-07-14：修复启动程序后自动触发监视屏幕
+- 2026-07-12：解决通过扫码登录在运行过程中登录失败的问题
+- 2026-07-12：解决直播流扫码延迟和漏检问题
+- 2026-07-11：忽略本地生成的配置与账号数据，防止误提交泄露
+- 2026-07-11：修复了直播流扫码无法打开、以及官服扫码缺头导致校验不稳定的问题
 
 ---
 
