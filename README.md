@@ -1,43 +1,37 @@
 # MHY_Scanner_py
 
-米哈游扫码登录器（Python 版），基于 PyQt6 开发的米哈游游戏账号扫码登录工具。
+米哈游扫码登录器（Python 版），基于 PyQt6 的米哈游游戏账号扫码登录工具。
 
-参考[Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)、[loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2)和[MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
-通过上述三个项目改进而来，修复了已知 BUG，优化了屏幕监视功能的稳定性。
+来源与参考：
 
-> **最新版本**: v1.0.6
->
-> **下载地址**: [Releases](https://github.com/MR-LIYA/MHY_Scanner/releases)
+- C++ 侧逻辑对齐 [loqwe/ErYouScanner](https://github.com/loqwe/ErYouScanner)（v2.0.2，原 `loqwe/MHY_Scanner2`）
+- 原始项目 [DSVVA/MHY_Scanner](https://github.com/DSVVA/MHY_Scanner)（原 `Theresa-0328/MHY_Scanner`）
+- 本仓库 fork 自 `MR-LIYA/MHY_Scanner`（该上游仓库现已 404，不可访问）
 
-> **项目主页**: [https://github.com/xiaomaimainp/MHY_Scanner_py](https://github.com/xiaomaimainp/MHY_Scanner_py)
+- **当前版本**：`2026.10.22`（版本号即更新日期，统一定义于 `utils/update.py` 的 `VERSION`）
+- **项目主页**：<https://github.com/xiaomaimainp/MHY_Scanner_py>
 
-> **备注**：本仓库（fork）的**源代码可直接使用**——`git clone` 后安装依赖（见仓库 `requirements.txt`）并运行 `python main.py` 即可；如需**打包好的安装程序（.exe）**，请前往原作者的 Releases 页面下载，本 fork 不发布安装包：
-> [原作者的 Releases](https://github.com/MR-LIYA/MHY_Scanner/releases)
+> 自用分支，**不做自动更新**：菜单「设置 → 打开项目主页」直接跳转仓库页面，不下载、不安装安装包。
+> 版本号按更新日期命名（`YYYY.MM.DD`），与原 fork 的 `1.0.x` 迭代号区分；每次改动代码即改为当天日期。
 
-- **检查更新**：本 fork 改为仅提示新版本并引导前往原作者 Releases 手动下载，不再内置自动下载安装包（安装包仍由原作者仓库提供）。
-
-首次运行时需要等待一会，以便产生对应的配置文件。
+首次运行需等待片刻以生成配置文件。
 
 ---
 
 ## 功能特性
 
-- **扫码登录**：基于 hoyolab Passport API，米游社 APP 扫码后确认即返回 Token，无需额外转换步骤
-- **短信登录**：支持手机号 + 验证码登录（现目前失效）
-- **Cookie 登录**：支持粘贴 SToken Cookie 直接登录（stuid + stoken + mid）
-- **B站崩坏3登录**：支持 BiliBili 服账号密码登录
-- **Cookie 刷新**：支持抖音/B站 Cookie 刷新（设置 → 刷新Cookie）
-- **屏幕扫描**：自动监视屏幕中出现的游戏内二维码，一键确认登录
+- **扫码登录**：基于 hoyolab Passport API，米游社 APP 扫码确认后直接返回 Token
+- **短信登录**：手机号 + 验证码登录，触发风控时自动弹出极验 v4 滑块
+- **Cookie 登录**：粘贴 SToken Cookie 直接登录（`stuid` + `stoken` + `mid`）
+- **B站崩坏3登录**：BiliBili 服账号密码登录
+- **Cookie 刷新**：抖音 / B站 Cookie 刷新（设置 → 刷新Cookie）
+- **屏幕扫描**：监视屏幕中出现的游戏内二维码，一键确认登录
 - **直播流扫描**：从 B站 / 抖音直播间实时检测二维码并自动登录
-- **多账号管理**：支持多账号存储、默认账号标记、服务器和备注编辑
+- **多账号管理**：多账号存储、默认账号标记、服务器与备注编辑
 - **四种游戏**：崩坏3、原神、星穹铁道、绝区零
 - **双服务器**：官服 + BiliBili 服（崩坏3）
-- **自动二次确认**：扫描到二维码后自动确认登录（开关，默认打开）
-- **自动退出**：登录成功后自动关闭程序（开关，默认关闭）
-- **自动启动扫描**：打开程序后自动开始屏幕扫描（开关，默认关闭）
-- **窗口置顶**：主窗口始终位于最前
-- **内置配置编辑器**：JSON 语法高亮、行号显示、智能缩进、缩放
-- **检查更新**：支持 GitHub Release 版本更新
+- **开关项**：自动二次确认（默认开）、登录后自动退出（默认关）、窗口置顶（默认开）、监视直播间时联动监视屏幕（默认关）
+- **内置配置编辑器**：JSON 语法高亮、行号、智能缩进、缩放
 
 ---
 
@@ -56,45 +50,30 @@
 
 | 项目 | 要求 |
 | ------ | ------ |
-| 操作系统 | Windows 10 21H2及以上版本（主要测试环境） |
-| Python 版本 | 3.8+ |
+| 操作系统 | Windows 10 21H2 及以上（主要测试环境） |
+| Python | 3.8+ |
 | 内存 | 建议 4GB+ |
-| FFmpeg | 直播流扫描需要（加入系统 PATH） |
-| Visual C++ 运行时 | 运行打包 exe 需要 [VC++ Redist](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| FFmpeg | 直播流扫描需要（加入 PATH，Win10 21H2+ 通常自带） |
+| VC++ Redist | 运行打包 exe 需要，[下载地址](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
 
 ---
 
 ## 安装（源码运行）
 
-### 1. 克隆项目
-
 ```bash
 git clone https://github.com/xiaomaimainp/MHY_Scanner_py.git
 cd MHY_Scanner_py
-```
-
-### 2. 安装依赖
-
-```bash
 pip install -r requirements.txt
-```
-
-### 3. 可选依赖
-
-- **curl_cffi**：用于绕过 WAF -3503 风控（扫码轮询成功率更高）
-
-```bash
-pip install curl_cffi
-```
-
-### 4. FFmpeg（直播流扫描）
-
-从 [FFmpeg 官网](https://ffmpeg.org/download.html) 下载，将 `bin` 目录加入系统 PATH 环境变量。若系统版本在Windows10 21H2及更版本系统会自带，无需安装。
-
-### 5. 运行
-
-```bash
 python main.py
+```
+
+**可选依赖**：
+
+- `curl_cffi`：模拟真实 TLS 指纹，绕过 WAF `-3503` 风控，提高扫码轮询成功率
+- `PyQt6-WebEngine`：极验滑块验证与 Cookie 刷新需要
+
+```bash
+pip install curl_cffi PyQt6-WebEngine
 ```
 
 ---
@@ -103,57 +82,49 @@ python main.py
 
 ### 扫码登录
 
-1. 启动程序，点击"扫码登录"
-2. 选择游戏和服务器类型
-3. 使用米游社 APP 扫描屏幕上显示的二维码
-4. 在手机上点击"确认登录"，Token 自动获取，账号自动保存到列表
+1. 点击「扫码登录」，选择游戏和服务器
+2. 用米游社 APP 扫描屏幕上显示的二维码
+3. 手机点击「确认登录」，Token 自动获取并保存到账号列表
 
-> 扫码登录基于 **hoyolab Passport API**（`passport-api.miyoushe.com`），确认登录后 Token 通过 `Set-Cookie` 直接返回，无需额外的 ticket 兑换步骤。
+> 基于 hoyolab Passport API（`passport-api.miyoushe.com`），确认后 Token 通过 `Set-Cookie` 直接返回，无需 ticket 兑换。
 
-### 短信登录（现目前可以正常接收验证码和登录账号，但扫码无法登录）
+### 短信登录
 
-1. 点击"短信登录"
-2. 输入手机号和验证码
-3. 验证通过后自动完成登录
+1. 点击「短信登录」，输入手机号后发送验证码
+2. 若触发风控（`-3101`），会自动弹出极验滑块，完成验证后自动重发验证码
+3. 输入收到的验证码即可登录
 
 ### Cookie 登录
 
-1. 点击"Cookie 登录"
-2. 粘贴完整的 Cookie 信息（格式：`stuid=xxx; stoken=xxx; mid=xxx`）
-3. 选择游戏和服务器，点击登录
+1. 点击「Cookie 登录」，粘贴 `stuid=xxx; stoken=xxx; mid=xxx`
+2. 选择游戏和服务器，点击登录
 
 ### B站崩坏3 登录
 
-1. 点击"B站崩坏3"
-2. 输入 B站 账号和密码
-3. 登录成功后账号自动保存
+1. 点击「B站崩坏3」，输入 B站 账号密码
+2. 登录成功后账号自动保存
 
-### 屏幕扫描（自动登录）
+### 屏幕 / 直播流扫描
 
-1. 在主窗口右侧选择直播平台和直播间号（留空则扫描屏幕）
-2. 点击"开始监视"
-3. 在游戏中打开扫码登录界面，程序会自动检测并确认登录
-
-### 直播流扫描
-
-1. 选择直播平台（B站 / 抖音）
-2. 输入房间号
-3. 点击"开始监视"
-4. 程序会从直播流中检测二维码并自动确认（手机短信登录失效）
+1. 右侧选择平台并填写直播间号（留空则扫描屏幕）
+2. 点击「开始监视」
+3. 游戏内打开扫码登录界面，程序自动检测并确认
 
 ### 账号管理
 
-- **默认账号状态标识**：选中账号后右键 → "设为默认账号"（左侧带圆点标记）
-- **编辑备注**：双击备注列直接编辑
-- **编辑 MID**：右键 → "编辑 MID"
-- **选择/替换/移除编辑默认账号**：右键/顶部账号管理 → “添加/修改/移除默认账号”
-- **删除账号**：右键 → "删除账号"
+| 操作 | 方式 |
+| ------ | ------ |
+| 设为默认账号 | 右键账号 → 设为默认（左侧圆点标记） |
+| 编辑备注 | 双击备注列 |
+| 编辑 MID | 右键 → 编辑 MID |
+| 添加/修改/移除默认账号 | 右键或顶部账号管理 |
+| 删除账号 | 右键 → 删除账号 |
 
 ---
 
 ## 配置说明
 
-配置文件位于 `Config/` 目录：
+配置文件位于 `Config/` 目录。
 
 ### config.json（应用设置）
 
@@ -161,30 +132,26 @@ python main.py
 | ------ | ---- | ------ | ---- |
 | `auto_exit` | bool | `true` | 登录成功后自动退出 |
 | `auto_login` | bool | `true` | 自动二次确认登录 |
-| `auto_start` | bool | `false` | 启动后自动开始扫描 |
+| `auto_start` | bool | `false` | 监视直播间时联动监视屏幕 |
 | `always_on_top` | bool | `true` | 窗口始终置顶 |
 | `last_platform` | int | `0` | 上次使用的直播平台 |
 | `room_id` | string | `""` | 上次输入的直播间号 |
 | `log_output_mode` | string | `"console"` / `"file"` | 日志输出模式 |
-| `log_level` | int | `0` / `2` | 日志级别（0=DEBUG, 1=INFO, 2=WARN, 3=ERROR） |
+| `log_level` | int | `0` / `2` | 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR |
 | `editor_font_cn` | string | `"Microsoft YaHei"` | 编辑器中文字体 |
 | `editor_font_en` | string | `"Consolas"` | 编辑器英文字体 |
 | `editor_font_size` | int | `12` | 编辑器字号 |
 
-> **注意**：源码运行时默认 `log_output_mode: "console"` + `log_level: 0`（DEBUG），打包后默认 `"file"` + `2`（WARN）。
+> 源码运行默认 `console` + `0`（DEBUG），打包后默认 `file` + `2`（WARN）。
 
 ### userinfo.json（账号数据）
 
-兼容 C++ 版 MHY_Scanner 格式，可通过环境变量 `MHY_USERINFO_PATH` 指向外部 C++ 项目的 `userinfo.json` 文件实现数据互通。
+格式兼容 C++ 版 MHY_Scanner。设置环境变量 `MHY_USERINFO_PATH` 指向 C++ 项目的 `userinfo.json` 即可数据互通：
 
-**设置方法**：
+1. `Win + R` → `sysdm.cpl` → 高级 → 环境变量
+2. 用户变量新建 `MHY_USERINFO_PATH`，值为完整路径（如 `D:\MHY_Scanner\Config\userinfo.json`），重启程序生效
 
-1. 按 `Win + R`，输入 `sysdm.cpl`，打开**系统属性**
-2. 点击 **高级** → **环境变量**
-3. 在**用户变量**中点击**新建**
-4. 变量名填写：`MHY_USERINFO_PATH`
-5. 变量值填写 C++ 项目中 `userinfo.json` 的完整路径，例如：`D:\MHY_Scanner\Config\userinfo.json`
-6. 点击确定，重启程序后生效
+`type` 字段映射：`"官服"` → 官服/原神，`"崩坏3B服"` → B服/崩坏3。
 
 ---
 
@@ -193,42 +160,33 @@ python main.py
 ```text
 MHY_Scanner/
 ├── main.py                     # 程序入口（版本号统一管理）
-├── __init__.py                 # 包入口
-├── requirements.txt            # Python 依赖清单
-├── api/                        # API 层
-│   ├── api.py                  # 米哈游 API 核心（hoyolab扫码 / 短信登录 / 游戏内二维码 / Token 交换）
+├── requirements.txt            # 依赖清单
+├── api/
+│   ├── api.py                  # 米哈游 API（扫码 / 短信登录 / 游戏内二维码 / Token 交换）
 │   └── bsgamesdk.py            # B站 SDK（崩坏3 B服 账号密码登录）
-├── core/                       # 核心模块
+├── core/
 │   ├── config.py               # 配置管理（单例，兼容 C++ userinfo.json）
-│   └── logger.py               # 日志系统（控制台 / 文件输出，多标签分类）
-├── scanner/                    # 扫描模块
-│   ├── scanner.py              # 屏幕二维码扫描器 + 直播流扫描器
+│   └── logger.py               # 日志系统（控制台 / 文件，多标签分类）
+├── scanner/
+│   ├── scanner.py              # 屏幕 + 直播流二维码扫描器
 │   └── livestream.py           # 直播流获取（B站 / 抖音）
-├── ui/                         # 用户界面
+├── ui/
 │   ├── main_window.py          # 主窗口（账号管理 / 扫描控制 / 菜单栏）
-│   ├── login_window.py         # 登录窗口（4 种登录方式 Tab 页）
+│   ├── login_window.py         # 登录窗口（4 种登录方式 Tab）
+│   ├── geetest_verify.py       # 极验 v4 滑块验证对话框
 │   ├── account_manager.py      # 账号管理器
-│   ├── add_account_dialog.py   # 手动添加账号对话框
-│   ├── config_editor.py        # 内置配置文件编辑器（JSON 高亮 + 行号）
-│   └── cookie_refresh_dialog.py # Cookie 刷新对话框（抖音/B站扫码刷新）
-├── utils/                      # 工具模块
-│   └── update.py               # 热更新管理器
+│   ├── add_account_dialog.py   # 手动添加账号
+│   ├── config_editor.py        # 内置配置编辑器
+│   └── cookie_refresh_dialog.py # Cookie 刷新（抖音/B站）
+├── utils/update.py             # 更新检查
 ├── hooks/                      # PyInstaller 打包钩子
-│   ├── hook-curl_cffi.py
-│   ├── hook-PIL.py
-│   └── hook-pyzbar.py
-├── Config/                     # 配置文件目录
-│   ├── config.json             # 应用设置（自动生成）
-│   ├── cookie.json             # 抖音/B站 Cookie 存储（自动生成）
-│   └── userinfo.json           # 账号数据（自动生成）
+├── Config/                     # 配置文件（自动生成）
 └── log/                        # 日志目录（自动生成）
 ```
 
 ---
 
 ## 编译打包
-
-### 使用 PyInstaller
 
 ```bash
 pip install pyinstaller
@@ -244,51 +202,33 @@ pyinstaller --onefile --windowed \
     main.py
 ```
 
-### 打包注意事项
-
-1. **curl_cffi** 为可选依赖，打包时建议包含以提升扫码轮询成功率
-2. 使用 `hooks/` 目录下的钩子文件确保相关子模块被正确收集
-3. 打包后日志默认输出到文件（`log/` 目录），而非控制台
-
-### 已打包版本
-
-预编译的 `.exe` 文件可直接运行，无需安装 Python 环境：
-
-1. 下载并安装 `MHY_Scanner.exe`
-2. 确保系统已安装 [VC++ Redist 运行时](https://aka.ms/vs/17/release/vc_redist.x64.exe)
-3. 直播流扫描需要安装 FFmpeg 并加入 PATH
+- `curl_cffi` 建议打包以提升扫码成功率
+- `hooks/` 确保子模块被正确收集
+- 打包后日志默认输出到 `log/` 而非控制台
+- 运行 exe 需安装 VC++ Redist；直播流扫描需 FFmpeg 在 PATH
 
 ---
 
 ## 注意事项
 
-### 使用注意
-
-1. **米游社 APP**：扫码登录需要在手机上安装米游社 APP 并已登录目标账号
+1. **米游社 APP**：扫码登录需手机安装米游社 APP 并登录目标账号
 2. **B站崩坏3**：仅支持崩坏3 BiliBili 服
-3. **直播流扫描**：需要先在系统上安装 FFmpeg，并确保非免流直播间
-4. **网络环境**：需要能够正常访问米哈游 API（`api-sdk.mihoyo.com` 等域名）
-5. **配置编辑器**：使用内置配置编辑器修改配置文件前建议备份，格式错误可能导致程序异常
+3. **直播流扫描**：需安装 FFmpeg，且非免流直播间
+4. **网络环境**：需可正常访问米哈游 API
+5. **配置编辑器**：修改前建议备份，格式错误可能导致程序异常
 
 ### WAF 风控
 
-- 米哈游对 API 请求有 WAF 风控（错误码 `-3503`）
-- **扫码登录**（自生成二维码）：使用 **hoyolab Passport API**（`passport-api.miyoushe.com`），WAF 策略更宽松，轮询稳定
-- **屏幕扫描**（游戏内二维码）：使用 hk4e-sdk 端点，仍可能触发 WAF
-- 推荐安装 `curl_cffi` 库模拟真实浏览器 TLS 指纹绕过风控
-- 轮询间隔已加入 0~500ms 随机抖动，避免触发频率限制
-
-### C++ 版兼容
-
-- `userinfo.json` 格式与 C++ 版 [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner) 兼容
-- 设置环境变量 `MHY_USERINFO_PATH` 指向 C++ 版项目的 `userinfo.json` 文件路径即可实现账号数据共享（详细步骤见上方配置说明）
-- `type` 字段映射：`"官服"` → 官服/原神，`"崩坏3B服"` → B服/崩坏3
+- 米哈游 API 有 WAF 风控（错误码 `-3503`）
+- **扫码登录**（自生成二维码）走 hoyolab Passport API，策略较宽松、轮询稳定
+- **屏幕扫描**（游戏内二维码）走 hk4e-sdk 端点，仍可能触发
+- 推荐安装 `curl_cffi` 模拟真实 TLS 指纹；轮询间隔已加 0~500ms 随机抖动
 
 ### 日志
 
-- 日志文件位于 `log/` 目录
-- 单文件上限 100KB，自动滚动归档，保留 7 天
-- 源码运行时默认输出到控制台（DEBUG 级别），打包后默认输出到文件（WARN 级别）
+- 位于 `log/`，单文件上限 100KB，自动滚动归档，保留 7 天
+- 源码运行输出控制台（DEBUG），打包后输出文件（WARN）
+- 日志已脱敏：`stoken` / `ltoken` / `mid` / 各类 token / 手机号 / 邮箱统一打码，`uid` / `ticket` 保留便于排查
 
 ---
 
@@ -297,54 +237,55 @@ pyinstaller --onefile --windowed \
 | 依赖 | 最低版本 | 用途 |
 | ------ | ------- | ------ |
 | PyQt6 | ≥6.4.0 | GUI 框架 |
-| PyQt6-WebEngine | ≥6.4.0 | Cookie 刷新浏览器内核 |
+| PyQt6-WebEngine | ≥6.4.0 | 极验滑块验证、Cookie 刷新浏览器内核 |
 | opencv-python | ≥4.8.0 | 图像处理与二维码检测 |
 | numpy | ≥1.24.0 | 数值计算 |
 | requests | ≥2.31.0 | HTTP 请求 |
 | Pillow | ≥10.0.0 | 图像处理 |
-| mss | ≥9.0.1 | 跨平台屏幕截图 |
+| mss | ≥9.0.1 | 屏幕截图 |
 | cryptography | ≥41.0.0 | RSA 加密 |
 | python-dateutil | ≥2.8.0 | 日期处理 |
 | qrcode | ≥7.4.0 | 二维码生成 |
 | ffmpeg-python | — | 视频流处理 |
 | pyzbar | ≥0.1.9 | 二维码解码（优先使用） |
 
-### 可选依赖
-
-| 依赖 | 用途 |
-| ------ | ------ |
-| curl_cffi | 模拟真实 TLS 指纹绕过 WAF 风控 |
+**可选**：`curl_cffi`（模拟真实 TLS 指纹绕过 WAF）。
 
 ---
 
-## 主要更新日志
+## 更新日志
 
-- 2026-10-13：更新`scanner/scanner.py` 截图自愈加固
-- 2026-07-14：更新 readme.md 文档
-- 2026-07-14：修复启动程序后自动触发监视屏幕
-- 2026-07-12：解决通过扫码登录在运行过程中登录失败的问题
-- 2026-07-12：解决直播流扫码延迟和漏检问题
-- 2026-07-11：忽略本地生成的配置与账号数据，防止误提交泄露
-- 2026-07-11：修复了直播流扫码无法打开、以及官服扫码缺头导致校验不稳定的问题
+> 版本号即更新日期，按改动当天填写；无迭代版本号。
+
+### 2026-10-22
+
+- **极验升级 v4**：改用 `static.geetest.com/v4/gt4.js`（`/static/js/gt4.js` 实测 404，会导致窗口空白）；v4 配置必须带 `userInfo:{"session_id":...}`，否则服务端回 `-3102 图片验证码失败`
+- **极验渲染**：采用 `product:'bind'` + `showCaptcha()`，并加看门狗——2.5 秒内无可见极验元素时自动回退 `popup` + `nativeButton`，保证窗口不空白
+- **结果回传**：QtWebEngine 下重写 `QWebEnginePage.acceptNavigationRequest` 拦截 `geetest://`（未注册 scheme 不会触发 `urlChanged`，结果会永远收不到）
+- **登录身份修正**：短信登录改用米游社身份 `app_id=bll8iq97cem8`（原游戏客户端 `c76ync6mutq8` 只下发 `v2_` 短期 token，导致扫码二次确认恒 `-100`）
+- **日志脱敏**：`stoken` / `mid` / 手机号等统一打码
+- **配置保存**：原子写（临时文件 + `os.replace`）+ `RLock`，对齐 C++ `QSaveFile`
+- **版本与更新**：版本号改为日期命名（`2026.10.22`）；移除自动更新与安装包下载，菜单改为「打开项目主页」跳转仓库；仓库地址统一改为 `xiaomaimainp/MHY_Scanner_py`
+- `v2_token → stoken` 兑换实验代码移入 `api/api_test.py`，已加入 `.gitignore`
+
+### 2026-07
+
+- **直播流扫描**：改用 FFmpeg 子进程管道读帧（对齐 C++ `avformat_open_input`），按平台注入 HTTP 头（B站缺 `Referer`/`Origin` 会 403）；保留 `cv2.VideoCapture` 回退
+- **官服扫码**：补齐 `x-rpc-app_id` / `x-rpc-device_id` 头
+- **自动监视语义修正**：原「启动时自动监视屏幕」改为「监视直播间时联动监视屏幕」，重启不再自动触发
+
+### 2026-06
+
+- 新增 Cookie 刷新（抖音直接刷新，B站需扫码登录提取登录态）
+- 验证码暂不支持 HarmonyOS 及 iOS
 
 ---
 
 ## 开源协议
 
 本项目仅供学习交流使用，请勿用于非法用途。
-## 参考项目：
-- [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner)  
 
-- [loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2)
-- [MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner)
---- 
+## 参考项目
 
-
-## 致谢
-
-- [Theresa-0328/MHY_Scanner](https://github.com/Theresa-0328/MHY_Scanner) — 原始 C++ 版项目
-- [loqwe/MHY_Scanner2](https://github.com/loqwe/MHY_Scanner2) — C++ 二改版项目
-- [MR-LIYA/MHY_Scanner](https://github.com/MR-LIYA/MHY_Scanner) — Python 版项目
-- [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) — Python GUI 框架
-- [OpenCV](https://opencv.org/) — 计算机视觉库
-- 所有贡献者和用户
+- [loqwe/ErYouScanner](https://github.com/loqwe/ErYouScanner) — C++ 侧对齐对象，二游扫码 v2.0.2（原 `loqwe/MHY_Scanner2`）
+- [DSVVA/MHY_Scanner](https://github.com/DSVVA/MHY_Scanner) — 原始项目（原 `Theresa-0328/MHY_Scanner`）

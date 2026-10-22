@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QLineEdit,
     QMenuBar, QMenu, QMessageBox, QAbstractItemView,
-    QInputDialog, QApplication, QGridLayout, QStyledItemDelegate, QProgressDialog,
+    QInputDialog, QApplication, QGridLayout, QStyledItemDelegate,
     QStyle, QStyleOptionViewItem, QDialog, QTextEdit
 )
 from PyQt6.QtCore import Qt, pyqtSlot, QTimer, QRegularExpression, QModelIndex, QThread, QObject, pyqtSignal
@@ -120,28 +120,6 @@ class QRCodePollingWorker(QObject):
         self.qr_timeout.emit()
 
 
-class DownloadUpdateWorker(QObject):
-    """下载更新工作线程（避免 UI 卡死）"""
-    progress = pyqtSignal(int)          # 下载进度 0-100
-    finished = pyqtSignal(bool, str)    # (success, error_msg)
-
-    def __init__(self, download_url: str):
-        super().__init__()
-        self.download_url = download_url
-
-    def run(self):
-        from utils.update import get_update_manager
-        mgr = get_update_manager()
-        try:
-            success = mgr.download_and_apply_update(
-                self.download_url,
-                progress_callback=lambda pct: self.progress.emit(pct)
-            )
-            self.finished.emit(success, "")
-        except Exception as e:
-            self.finished.emit(False, str(e))
-
-
 class GameComboDelegate(QStyledItemDelegate):
     """游戏类型下拉选择委托"""
 
@@ -178,8 +156,8 @@ class GameComboDelegate(QStyledItemDelegate):
 class MainWindow(QMainWindow):
     """主窗口"""
     
-    GITHUB_URL = "https://github.com/MR-LIYA/MHY_Scanner"
-    GITHUB_ISSUES_URL = "https://github.com/MR-LIYA/MHY_Scanner/issues"
+    GITHUB_URL = "https://github.com/xiaomaimainp/MHY_Scanner_py"
+    GITHUB_ISSUES_URL = "https://github.com/xiaomaimainp/MHY_Scanner_py/issues"
 
     GAME_NAMES = {
         GameType.Honkai3: "崩坏3",
@@ -200,13 +178,21 @@ class MainWindow(QMainWindow):
     )
 
     CHANGELOG_HTML = """
-            <h3>v1.0.3 (2026-05)</h3>
+            <h3>2026-10-22</h3>
             <ul>
-                <li>支持手动刷新cookie（抖音直接刷新即可，B站需要扫码登陆一下提取登录态）</li>
-                <li>当前版本验证码暂不支持HarmonyOS及IOS，后续修复</li>
+                <li>极验升级 v4：改用 /v4/gt4.js，补齐 userInfo（session_id），bind + showCaptcha 并加回退看门狗</li>
+                <li>短信登录身份修正为米游社 app_id=bll8iq97cem8，修复扫码二次确认恒 -100</li>
+                <li>日志脱敏：stoken / mid / 手机号等统一打码</li>
+                <li>版本号改为日期命名，移除自动更新与安装包下载，改为跳转项目主页</li>
             </ul>
             <hr>
-            <p style='color:gray;font-size:12px;'>本项目为参考项目改进而来，修复了已知 BUG。</p>
+            <h3>2026-10-21</h3>
+            <ul>
+                <li>手机号登录修复（极验 -3101 / X-Rpc-Aigis 解析）</li>
+                <li>配置原子保存 + 锁（对齐 C++ QSaveFile）</li>
+            </ul>
+            <hr>
+            <p style='color:gray;font-size:12px;'>自用分支，版本号即更新日期。</p>
         """
 
     @staticmethod
@@ -520,9 +506,9 @@ class MainWindow(QMainWindow):
         refresh_cookie_action.triggered.connect(self.show_cookie_refresh_dialog)
         settings_menu.addAction(refresh_cookie_action)
         
-        check_update_action = QAction("检查更新", self)
-        check_update_action.triggered.connect(self.check_for_updates)
-        settings_menu.addAction(check_update_action)
+        open_project_action = QAction("打开项目主页", self)
+        open_project_action.triggered.connect(self.open_project_page)
+        settings_menu.addAction(open_project_action)
         
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
@@ -890,9 +876,11 @@ class MainWindow(QMainWindow):
         """
         account = self.selected_account
 
-        # 对齐 C++ pBtstartScreen：开扫/使用前先校验 stoken 是否有效，
-        # 失效则直接中止（对应 C++ CheckStokenValid → "登录状态失效，请重新添加账号！"）
-        if not self.api.check_stoken_valid(account.token, account.mid):
+        # 对齐 C++ ErYou QRCodeForScreen：屏幕扫码不预校验 stoken，直接用账号 token 走
+        # passport 二维码扫码/确认。注意 getCookieAccountInfoBySToken 不认短信登录的 v2_ token，
+        # 故仅对 Cookie 登录（老格式 stoken，非 v2_ 前缀）做登录态预校验；v2_ 账号跳过，
+        # 由后续 passport 二维码接口直接校验（失败会自然返回错误）。
+        if not account.token.startswith("v2_") and not self.api.check_stoken_valid(account.token, account.mid):
             gui_log("账号登录状态失效（stoken 校验失败）", LogLevel.ERROR)
             QMessageBox.warning(self, "提示", "登录状态失效，\n请重新添加账号！")
             return
@@ -930,6 +918,25 @@ class MainWindow(QMainWindow):
             qr_log("账号缺少 mid，无法完成 passport 扫码", LogLevel.WARN)
             QMessageBox.warning(self, "错误", self.MID_HELP_TEXT)
             return
+
+        # 懒兑换：账号里若存的是短信登录拿到的原始 v2_ token（旧版本保存下来的），
+        # 直接拿去 passport 扫码会被 -100 拒绝。开扫前先兑换为长效 stoken，
+        # 并写回配置持久化，避免每次开扫都重换。
+        if account.token.startswith("v2_"):
+            ret, real_token, real_mid = self.api.exchange_v2_to_stoken(
+                account.token, account.uid, account.mid)
+            if ret == 0 and real_token:
+                account.token = real_token
+                if real_mid:
+                    account.mid = real_mid
+                qr_log("v2_ 已兑换为长效 stoken（开扫前懒兑换）", LogLevel.INFO)
+                try:
+                    self.config.save_accounts()
+                except Exception as _e:
+                    qr_log(f"保存兑换后的 stoken 失败: {_e}", LogLevel.WARN)
+            else:
+                qr_log(f"v2_ 兑换失败(retcode={ret})，短信登录凭证可能已过期，请重新短信登录",
+                       LogLevel.WARN)
 
         ok = self.api.scan_passport_qr_login(passport_url, account.token, account.mid)
         if not ok:
@@ -1607,71 +1614,14 @@ class MainWindow(QMainWindow):
         dialog = CookieRefreshDialog(self)
         dialog.exec()
 
-    def check_for_updates(self):
-        """检查更新"""
-        from utils.update import check_for_updates
-        info = check_for_updates()
-        if info.get("check_failed"):
-            gui_log("检查更新失败，请检查网络连接")
-            QMessageBox.warning(self, "检查更新", "检查更新失败，无法连接到 GitHub。\n请检查网络连接后重试。")
-        elif info.get("no_release"):
-            gui_log("仓库暂无 Release 版本")
-            QMessageBox.information(self, "检查更新", "GitHub 仓库尚未发布任何 Release 版本，暂无更新源。")
-        elif info["has_update"]:
-            gui_log(f"发现新版本: {info['latest_version']}")
-            reply = QMessageBox.information(
-                self, "发现新版本",
-                f"当前版本: {info['current_version']}\n"
-                f"最新版本: {info['latest_version']}\n\n"
-                f"是否立即下载更新？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                # 后台线程下载，避免 UI 卡死
-                self._start_download_update(info["download_url"])
-        else:
-            gui_log("当前已是最新版本")
-            QMessageBox.information(self, "检查更新", "当前已是最新版本")
+    def open_project_page(self):
+        """打开项目主页（不做自动更新，不下载安装包）"""
+        import webbrowser
+        app = QApplication.instance()
+        ver = app.applicationVersion() if app else ""
+        webbrowser.open(self.GITHUB_URL)
+        gui_log(f"已打开项目主页 {self.GITHUB_URL}（当前版本 {ver}）")
 
-    def _start_download_update(self, download_url: str):
-        """启动后台下载更新（带进度对话框）"""
-        self._download_progress = QProgressDialog("正在下载更新...", None, 0, 100, self)
-        self._download_progress.setWindowTitle("下载更新")
-        self._download_progress.setWindowModality(Qt.WindowModality.WindowModal)
-        self._download_progress.setMinimumDuration(0)
-        self._download_progress.setAutoClose(False)
-        self._download_progress.setAutoReset(False)
-        self._download_progress.setCancelButton(None)  # 下载期间不允许取消
-
-        # 创建工作线程
-        self._download_thread = QThread()
-        self._download_worker = DownloadUpdateWorker(download_url)
-        self._download_worker.moveToThread(self._download_thread)
-
-        # 连接信号
-        self._download_worker.progress.connect(self._download_progress.setValue)
-        self._download_worker.finished.connect(self._on_download_finished)
-        self._download_thread.started.connect(self._download_worker.run)
-        # worker 完成后清理
-        self._download_worker.finished.connect(self._download_thread.quit)
-        self._download_worker.finished.connect(self._download_worker.deleteLater)
-        self._download_thread.finished.connect(self._download_thread.deleteLater)
-
-        self._download_thread.start()
-
-    def _on_download_finished(self, success: bool, error_msg: str):
-        """下载完成回调"""
-        if hasattr(self, "_download_progress"):
-            self._download_progress.close()
-
-        if success:
-            gui_log("更新已下载，程序即将退出并重启...")
-            QMessageBox.information(self, "下载完成", "更新已下载，程序即将退出并启动安装程序。")
-            QApplication.instance().quit()
-        else:
-            gui_log(f"下载更新失败: {error_msg}")
-            QMessageBox.warning(self, "下载失败", f"下载更新失败。\n{error_msg}\n请检查网络连接后重试。")
-    
     def show_about(self):
         """显示关于"""
         from PyQt6.QtWidgets import QApplication
@@ -1685,7 +1635,7 @@ class MainWindow(QMainWindow):
             f"<p>基于PyQt6+OpenCV实现</p>"
             f"<p>支持: 原神、星穹铁道、绝区零、崩坏3</p>"
             f"<p>本项目为免费开源项目，用于学习和研究，禁止商业化用途。</p>"
-            F"<p>本项目参考项目: <a href='{self.GITHUB_URL}'>{self.GITHUB_URL}</a>制作</p>"
+            f"<p>项目主页: <a href='{self.GITHUB_URL}'>{self.GITHUB_URL}</a></p>"
         )
 
     def show_changelog(self):

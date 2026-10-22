@@ -162,6 +162,9 @@ GAME_TOKEN_STOKEN = f"{TAKUMI_BASE}/account/ma-cn-session/app/getTokenByGameToke
 MULTI_TOKEN = f"{TAKUMI_BASE}/auth/api/getMultiTokenByLoginTicket"
 # 校验 stoken 是否有效（对齐 C++ CheckStokenValid: getCookieAccountInfoBySToken）
 COOKIE_ACCOUNT_INFO = f"{TAKUMI_BASE}/auth/api/getCookieAccountInfoBySToken"
+# v2_ token 兑换为真正长效 stoken 的端点（对齐 C++ GetGameTokenByStoken + GetStokenByGameToken，ErYou 2.0.2 登录流程关键一步）
+GAME_TOKEN = f"{TAKUMI_BASE}/auth/api/getGameToken"
+GAME_TOKEN_STOKEN = f"{TAKUMI_BASE}/account/ma-cn-session/app/getTokenByGameToken"
 
 # ── 短信登录 ───────────────────────────────────────────────────
 # 端点: passport-api.mihoyo.com
@@ -204,6 +207,10 @@ USER_INFO = f"{MYS_BASE}/user/api/getUserFullInfo"
 _last_sms_send_time = 0
 SMS_COOLDOWN_SECONDS = 60  # 发送间隔至少60秒
 
+# 短信登录专用返回码（非米游社官方码，用于区分“结果未知/响应异常”）
+SMS_TRANSPORT_ERROR = -9998   # 网络/HTTP 层出错，结果未知
+SMS_INVALID_RESPONSE = -9999  # 响应非预期结构（缺字段等）
+
 # DS 签名盐值
 SALT_X6 = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"
 
@@ -215,27 +222,33 @@ DEVICE_FP = "38d814469b1e4"
 
 
 def get_sms_request_headers(lifecycle_id: str = "") -> Dict[str, str]:
-    """获取短信登录专用请求头（对齐游戏客户端风格，无DS签名）"""
-    if not lifecycle_id:
-        lifecycle_id = str(uuid.uuid4())
-    return {
-        "Accept": "*/*",
+    """短信登录请求头 —— 对齐 ErYou 2.0.2 GetRequestHeader()（MhyApi.hpp:61-72）
+
+    关键（这是扫码一直 -100 的真正根因）：必须用「米游社 BBS」客户端身份
+    app_id=bll8iq97cem8 / client_type=2 / game_biz=bbs_cn，
+    而不是游戏客户端身份（c76ync6mutq8 / client_type=3 / hk4e_cn）。
+
+    原因：passport 的 scanQRLogin / confirmQRLogin 用的 app_id 正是 bll8iq97cem8，
+    该体系只认「米游社身份」下发的 stoken。用游戏客户端身份登录时服务端只下发
+    v2_ 短期 token，它既不能用于 passport 扫码（恒 -100），也无法兑换成
+    长效 stoken（getGameToken 三级回退全 -100）——ErYou 编译版能跑通正是因为
+    它用的是 BBS 身份。DS 签名由调用方按需附加（见 send_sms_code / login_by_sms）。
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) miHoYoBBS/2.76.1",
+        "Accept": "application/json",
         "Content-Type": "application/json",
-        "x-rpc-app_id": "c76ync6mutq8",
-        "x-rpc-channel_id": "1",
-        "x-rpc-channel_version": "2.49.0.189",
-        "x-rpc-client_type": "3",
-        "x-rpc-device_fp": DEVICE_FP,
+        "x-rpc-app_id": "bll8iq97cem8",
+        "x-rpc-app_version": "2.76.1",
+        "x-rpc-client_type": "2",
         "x-rpc-device_id": DEVICE_ID,
-        "x-rpc-device_model": "8BAB",
-        "x-rpc-device_name": "LAPTOP-T17POR1K",
-        "x-rpc-game_biz": "hk4e_cn",
-        "x-rpc-language": "zh-cn",
-        "x-rpc-lifecycle_id": lifecycle_id,
-        "x-rpc-mdk_version": "2.49.0.189",
-        "x-rpc-sdk_version": "2.49.0.189",
-        "x-rpc-sys_version": "Windows%2011",
+        "x-rpc-device_name": "",
+        "x-rpc-game_biz": "bbs_cn",
+        "x-rpc-sdk_version": "2.16.0",
     }
+    if lifecycle_id:
+        headers["x-rpc-lifecycle_id"] = lifecycle_id
+    return headers
 
 
 def create_uuid4() -> str:
@@ -914,7 +927,7 @@ class MhyApi:
 
         ticket = passport 二维码中的 tk 参数
         token_types = passport 二维码中的 token_types 参数（以 # 结尾）
-        POST passport-api.mihoyo.com/.../app/{scan|confirm}QRLogin，带 stoken;mid Cookie
+        POST passport-api.mihoyo.com/.../app/{scan|confirm}QRLogin，带 stoken;mid Cookie。先试 stoken=，失败(-100)再试 stoken_v2=（见函数内逻辑）。
         """
         ticket = self.get_passport_qr_param(passport_qr_url, "tk", "&")
         token_types = self.get_passport_qr_param(passport_qr_url, "token_types", "#")
@@ -922,28 +935,37 @@ class MhyApi:
             qr_log("[passport_qr] 缺少 tk 或 token_types 参数", LogLevel.WARN)
             return False
 
-        cookie = f"stoken={stoken};mid={mid}"
         body = {
             "ticket": ticket,
             "token_types": [token_types],
         }
         url = PASSPORT_CONFIRM_QR if confirm else PASSPORT_SCAN_QR
-        headers = {
+        base_headers = {
             "Content-Type": "application/json",
             "x-rpc-app_id": PASSPORT_PANDA_APP_ID,
             "x-rpc-device_id": self.device_id,
-            "Cookie": cookie,
         }
-
         phase = "confirm" if confirm else "scan"
-        try:
-            resp = _safe_post(url, json_data=body, headers=headers)
-            result = resp.json()
-            qr_log(f"[passport_qr_{phase}] response: {result}", LogLevel.DEBUG)
-            return result.get("retcode", -1) == 0
-        except Exception as e:
-            qr_log(f"[passport_qr_{phase}] 异常: {e}", LogLevel.ERROR)
-            return False
+
+        # C++ 源码 PassportQRCodeLogin 写死 stoken=；但其编译版能跑通 SMS(v2_) 账号，
+        # 故先试 stoken=（对齐源码），失败(-100)再试 stoken_v2=（对齐 GetGameTokenByStoken 的 v2 处理），
+        # 并打日志指出实际生效的写法，一次性定位 cookie 名问题。
+        for cookie_name in ("stoken", "stoken_v2"):
+            cookie = f"{cookie_name}={stoken};mid={mid}"
+            headers = {**base_headers, "Cookie": cookie}
+            qr_log(f"[passport_qr_{phase}] ({cookie_name}=) REQ url={url}", LogLevel.DEBUG)
+            qr_log(f"[passport_qr_{phase}] ({cookie_name}=) headers={headers}", LogLevel.DEBUG)
+            qr_log(f"[passport_qr_{phase}] ({cookie_name}=) body={body}", LogLevel.DEBUG)
+            try:
+                resp = _safe_post(url, json_data=body, headers=headers)
+                result = resp.json()
+                qr_log(f"[passport_qr_{phase}] ({cookie_name}=) response: {result}", LogLevel.DEBUG)
+                if result.get("retcode", -1) == 0:
+                    qr_log(f"[passport_qr_{phase}] {cookie_name}= 成功", LogLevel.INFO)
+                    return True
+            except Exception as e:
+                qr_log(f"[passport_qr_{phase}] ({cookie_name}=) 异常: {e}", LogLevel.ERROR)
+        return False
 
     def scan_passport_qr_login(self, passport_qr_url: str, stoken: str, mid: str) -> bool:
         """passport 扫码（对齐 C++ ScanPassportQRLogin）"""
@@ -974,6 +996,72 @@ class MhyApi:
         except Exception as e:
             qr_log(f"[check_stoken] 异常: {e}", LogLevel.ERROR)
             return False
+
+    def exchange_v2_to_stoken(self, v2_token: str, uid: str, mid: str) -> Tuple[int, str, str]:
+        """把短信登录拿到的 v2_ token 兑换为真正的长效 stoken（对齐 ErYou 2.0.2 登录流程）
+
+        1) GetGameTokenByStoken: GET /auth/api/getGameToken
+           Cookie: stoken_v2=<v2_>;mid=<mid>  →  data.game_token
+        2) GetStokenByGameToken: POST /account/ma-cn-session/app/getTokenByGameToken
+           body: {"account_id": int(uid), "game_token": "<game_token>"}
+           →  data.token.token（真正的长效 stoken）、data.user_info.mid
+
+        返回 (retcode, real_stoken, real_mid)。retcode==0 时：real_stoken 可直接用于
+        check_stoken / passport 二维码扫码/确认（均用 stoken= cookie），且为长效凭证，
+        不受 v2_ 短期 TTL 限制——这正是 ErYou 2.0.2 能扫码、旧版源码/Python 直接拿 v2_ 会 -100 的根因。
+        """
+        if not v2_token or not mid:
+            return -1, "", ""
+        # 步骤1：v2_ → game_token
+        # 对齐 C++ GetGameTokenByStoken（MhyApi.hpp:196-231）的三级回退：
+        #   1) Cookie: stoken_v2=<token>; mid=<mid>   （仅 v2_ 前缀时）
+        #   2) Cookie: stoken=<token>; mid=<mid>
+        #   3) 查询参数 ?stoken=<token>&mid=<mid>
+        # 只试第一级是不够的：实测 v2_ 走 stoken_v2 cookie 会返回 -100，必须逐级回退。
+        from urllib.parse import urlencode
+        attempts = []
+        if v2_token.startswith("v2_"):
+            attempts.append(("stoken_v2 cookie", {"Cookie": f"stoken_v2={v2_token}; mid={mid}"}))
+        attempts.append(("stoken cookie", {"Cookie": f"stoken={v2_token}; mid={mid}"}))
+        attempts.append(("查询参数", {}))
+
+        game_token = ""
+        last_ret = -1
+        for tag, headers in attempts:
+            try:
+                url = GAME_TOKEN
+                if not headers:
+                    url = f"{GAME_TOKEN}?{urlencode({'stoken': v2_token, 'mid': mid})}"
+                resp = _safe_get(url, headers=headers)
+                j = resp.json()
+                ret = j.get("retcode", -1)
+                data = j.get("data") or {}
+                if ret == 0 and isinstance(data, dict) and "game_token" in data:
+                    game_token = data["game_token"]
+                    qr_log(f"[exchange_v2] getGameToken 成功（{tag}）", LogLevel.INFO)
+                    break
+                qr_log(f"[exchange_v2] getGameToken {tag} retcode={ret}", LogLevel.DEBUG)
+                if ret != -1:
+                    last_ret = ret
+            except Exception as e:
+                qr_log(f"[exchange_v2] getGameToken {tag} 异常: {e}", LogLevel.WARN)
+        if not game_token:
+            return last_ret, "", ""
+
+        # 步骤2：game_token → 真正 stoken
+        try:
+            body = {"account_id": int(uid), "game_token": game_token}
+            resp = _safe_post(GAME_TOKEN_STOKEN, json_data=body, headers=get_request_headers())
+            j = resp.json()
+            if j.get("retcode", -1) != 0 or "data" not in j or "token" not in j["data"]:
+                qr_log(f"[exchange_v2] getTokenByGameToken retcode={j.get('retcode')}", LogLevel.DEBUG)
+                return j.get("retcode", -1), "", ""
+            real_stoken = j["data"]["token"]["token"]
+            real_mid = j["data"].get("user_info", {}).get("mid", mid)
+            return 0, real_stoken, real_mid
+        except Exception as e:
+            qr_log(f"[exchange_v2] getTokenByGameToken 异常: {e}", LogLevel.ERROR)
+            return -1, "", ""
 
     # ═══════════════════════════════════════════════════
     # hoyolab / 米游社 扫码登录（新 passport API）
@@ -1206,83 +1294,128 @@ class MhyApi:
     
     # ========== 短信登录 ==========
     
-    def send_sms_code(self, phone: str) -> Tuple[int, str, Dict[str, Any]]:
+    def send_sms_code(self, phone: str, aigis: str = "") -> Tuple[int, str, Dict[str, Any]]:
         """
         发送短信验证码
+
         Args:
             phone: 手机号 (如 13800138000 或 +8613800138000)
-        Returns: (retcode, action_type, extra_data)
+            aigis: 通过人机验证后构建的 X-Rpc-Aigis 头（session_id;base64(验证结果)），
+                   首次请求留空；当服务端返回 -3101 要求验证时，前端完成验证后再带此参数重试。
+        Returns: (retcode, message, extra_data)
+            retcode == 0        -> message 为 action_type，extra_data 为空
+            retcode == -3101    -> extra_data 含 geetest 字段，需要人机验证
+            retcode == SMS_TRANSPORT_ERROR / SMS_INVALID_RESPONSE -> 结果未知/响应异常
         """
         global _last_sms_send_time
-        
-        current_time = time.time()
-        if current_time - _last_sms_send_time < SMS_COOLDOWN_SECONDS:
-            remaining = int(SMS_COOLDOWN_SECONDS - (current_time - _last_sms_send_time))
-            api_log(f"[send_sms_code] 发送过于频繁，请等待 {remaining} 秒后再试", LogLevel.WARN)
-            return -3002, f"发送过于频繁，请等待 {remaining} 秒后再试", {}
-        _last_sms_send_time = current_time
-        
+
+        if not aigis:
+            current_time = time.time()
+            if current_time - _last_sms_send_time < SMS_COOLDOWN_SECONDS:
+                remaining = int(SMS_COOLDOWN_SECONDS - (current_time - _last_sms_send_time))
+                api_log(f"[send_sms_code] 发送过于频繁，请等待 {remaining} 秒后再试", LogLevel.WARN)
+                return -3002, f"发送过于频繁，请等待 {remaining} 秒后再试", {}
+            _last_sms_send_time = current_time
+
         import requests as req
-        
+
         # 提取纯手机号（去掉+86前缀）
         clean_phone = phone
         if clean_phone.startswith("+86"):
             clean_phone = clean_phone[3:]
         elif clean_phone.startswith("86"):
             clean_phone = clean_phone[2:]
-        
+
         # RSA加密手机号和区号（新版API两者都需要加密）
         encrypted_phone = self._rsa_encrypt(clean_phone)
         encrypted_area_code = self._rsa_encrypt("+86")
-        
+
         body_data = {
             "area_code": encrypted_area_code,
             "mobile": encrypted_phone
         }
         body_str = json.dumps(body_data, separators=(',', ':'))
         
-        # 使用游戏客户端风格请求头（无DS签名）
+        # 对齐 C++ 版：游戏客户端风格请求头 + DS 签名
         lifecycle_id = str(uuid.uuid4())
         headers = get_sms_request_headers(lifecycle_id)
         headers["Content-Length"] = str(len(body_str))
-        
-        api_log(f"[send_sms_code] 发送请求到: {SMS_CREATE}", LogLevel.DEBUG)
-        api_log(f"[send_sms_code] 请求体: {body_str}", LogLevel.DEBUG)
-        
+        headers["DS"] = generate_ds(body_str, "")
+        if aigis:
+            headers["X-Rpc-Aigis"] = aigis
+
+        api_log(f"[send_sms_code] 发送请求到: {SMS_CREATE}" + (" (带Aigis)" if aigis else ""), LogLevel.DEBUG)
+
         try:
             resp = req.post(SMS_CREATE, data=body_str.encode(), headers=headers, timeout=10)
+            if resp.status_code != 200 or not resp.text:
+                api_log(f"[send_sms_code] 传输层异常 http={resp.status_code}", LogLevel.ERROR)
+                return SMS_TRANSPORT_ERROR, "请求结果未知（HTTP %d），请勿重复发送，稍后查看手机是否收到短信。" % resp.status_code, {}
             result = resp.json()
             api_log(f"[send_sms_code] response: {result}", LogLevel.DEBUG)
-            
+
+            # 捕获服务端下发的人机验证参数（位于 X-Rpc-Aigis 响应头）
+            aigis_header = resp.headers.get("X-Rpc-Aigis", "")
             retcode = result.get("retcode", -1)
-            
+
             if retcode == 0:
                 action_type = result.get("data", {}).get("action_type", "")
                 return 0, action_type, {}
-            else:
-                return retcode, result.get("message", ""), {}
+            if retcode == -3101 and aigis_header:
+                try:
+                    aigis_json = json.loads(aigis_header)
+                    captcha_json = json.loads(aigis_json.get("data", "{}"))
+                    geetest = {
+                        "session_id": aigis_json.get("session_id", ""),
+                        "mmt_type": aigis_json.get("mmt_type", 0),
+                        "gt": captcha_json.get("gt", ""),
+                        "challenge": captcha_json.get("challenge", ""),
+                        "use_v4": captcha_json.get("use_v4", False),
+                        "risk_type": captcha_json.get("risk_type", ""),
+                    }
+                    # 对齐 C++ ParseMhySmsResponse：session_id、mmt_type==1、gt 均有效才进入极验
+                    if geetest["session_id"] and geetest["gt"] and geetest["mmt_type"] == 1:
+                        return -3101, "需要进行人机验证", geetest
+                except Exception as e:
+                    api_log(f"[send_sms_code] 解析 X-Rpc-Aigis 失败: {e}", LogLevel.ERROR)
+                return SMS_INVALID_RESPONSE, "服务端要求人机验证但未返回有效参数，请稍后重试。", {}
+            if retcode == -3008:
+                return -3008, "手机号格式错误，请检查后重试。", {}
+            if retcode == -3006:
+                return -3006, "请求过于频繁，请稍后再试。", {}
+            return retcode, result.get("message", ""), {}
+        except (ValueError, json.JSONDecodeError) as e:
+            api_log(f"[send_sms_code] 响应解析失败: {e}", LogLevel.ERROR)
+            return SMS_INVALID_RESPONSE, "服务端响应格式异常，暂不发送，详见日志。", {}
         except Exception as e:
             api_log(f"[send_sms_code] exception: {e}", LogLevel.ERROR)
-            return -1, str(e), {}
+            return SMS_TRANSPORT_ERROR, f"请求失败: {e}", {}
     
-    def login_by_sms(self, phone: str, captcha: str, action_type: str = "") -> Tuple[int, str, str, str]:
+    def login_by_sms(self, phone: str, captcha: str, action_type: str = "", aigis: str = "") -> Tuple[int, str, str, str]:
         """
         短信验证码登录
+        Args:
+            phone: 手机号
+            captcha: 短信验证码
+            action_type: 申请验证码时返回的 action_type
+            aigis: 人机验证后构建的 X-Rpc-Aigis 头（可选）
         Returns: (retcode, v2_token, uid, mid)
+            retcode == 0 -> 成功
+            retcode == SMS_TRANSPORT_ERROR / SMS_INVALID_RESPONSE -> 结果未知/响应异常
         """
         import requests as req
-        
+
         # 提取纯手机号
         clean_phone = phone
         if clean_phone.startswith("+86"):
             clean_phone = clean_phone[3:]
         elif clean_phone.startswith("86"):
             clean_phone = clean_phone[2:]
-        
+
         # RSA加密手机号和区号（新版API两者都需要加密）
         encrypted_phone = self._rsa_encrypt(clean_phone)
         encrypted_area_code = self._rsa_encrypt("+86")
-        
+
         body_data = {
             "area_code": encrypted_area_code,
             "action_type": action_type,
@@ -1291,33 +1424,51 @@ class MhyApi:
         }
         body_str = json.dumps(body_data, separators=(',', ':'))
         
-        # 使用游戏客户端风格请求头（无DS签名）
+        # 对齐 C++ 版：游戏客户端风格请求头 + DS 签名
         lifecycle_id = str(uuid.uuid4())
         headers = get_sms_request_headers(lifecycle_id)
         headers["Content-Length"] = str(len(body_str))
-        
-        api_log(f"[login_by_sms] 发送请求到: {SMS_LOGIN}", LogLevel.DEBUG)
-        api_log(f"[login_by_sms] 请求体: {body_str}", LogLevel.DEBUG)
-        
+        headers["DS"] = generate_ds(body_str, "")
+        if aigis:
+            headers["X-Rpc-Aigis"] = aigis
+
+        api_log(f"[login_by_sms] 发送请求到: {SMS_LOGIN}" + (" (带Aigis)" if aigis else ""), LogLevel.DEBUG)
+
         try:
             resp = req.post(SMS_LOGIN, data=body_str.encode(), headers=headers, timeout=10)
+            if resp.status_code != 200 or not resp.text:
+                api_log(f"[login_by_sms] 传输层异常 http={resp.status_code}", LogLevel.ERROR)
+                return SMS_TRANSPORT_ERROR, "", "", ""
             result = resp.json()
             api_log(f"[login_by_sms] response: {result}", LogLevel.DEBUG)
-            
+
             retcode = result.get("retcode", -1)
-            
             if retcode == 0:
-                v2_token = result["data"]["token"]["token"]
-                uid = str(result["data"]["user_info"]["aid"])
-                mid = result["data"]["user_info"]["mid"]
-                return 0, v2_token, uid, mid
-            elif retcode == -3205:
+                try:
+                    data = result["data"]
+                    v2_token = data["token"]["token"]
+                    uid = str(data["user_info"]["aid"])
+                    mid = data["user_info"]["mid"]
+                    # 兑换 v2_ → 真正长效 stoken（对齐 ErYou 2.0.2：GetGameTokenByStoken + GetStokenByGameToken）
+                    # 否则直接用 v2_ 去打 check_stoken / passport 扫码会被 -100 拒绝。
+                    ec, real_stoken, real_mid = self.exchange_v2_to_stoken(v2_token, uid, mid)
+                    if ec == 0 and real_stoken:
+                        qr_log("[login_by_sms] v2_ 已兑换为长效 stoken", LogLevel.INFO)
+                        return 0, real_stoken, uid, real_mid
+                    qr_log("[login_by_sms] v2_ 兑换失败，回退使用原始 v2_ token", LogLevel.WARN)
+                    return 0, v2_token, uid, mid
+                except (KeyError, TypeError) as e:
+                    api_log(f"[login_by_sms] 成功响应缺字段: {e}", LogLevel.ERROR)
+                    return SMS_INVALID_RESPONSE, "", "", ""
+            if retcode == -3205:
                 return -3205, "", "", ""
-            else:
-                return retcode, "", "", ""
+            return retcode, "", "", ""
+        except (ValueError, json.JSONDecodeError) as e:
+            api_log(f"[login_by_sms] 响应解析失败: {e}", LogLevel.ERROR)
+            return SMS_INVALID_RESPONSE, "", "", ""
         except Exception as e:
             api_log(f"[login_by_sms] exception: {e}", LogLevel.ERROR)
-            return -1, "", "", ""
+            return SMS_TRANSPORT_ERROR, "", "", ""
     
     def _rsa_encrypt(self, data: str) -> str:
         """RSA加密（复用模块级函数）"""

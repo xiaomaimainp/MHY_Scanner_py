@@ -21,9 +21,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QObject
 
-from api import MhyApi, ServerType, GameType, LoginQRCodeState, BSGameSDK
+from api import MhyApi, ServerType, GameType, LoginQRCodeState, BSGameSDK, SMS_TRANSPORT_ERROR, SMS_INVALID_RESPONSE
 from core.config import Account
 from core.logger import qr_log, gui_log, error, LogLevel
+from ui.geetest_verify import verify_geetest, build_aigis_header
 from PyQt6.QtGui import QPixmap, QImage, QFont, QCursor
 
 
@@ -76,7 +77,7 @@ class LoginWindow(QDialog):
     login_success = pyqtSignal(str, str, str, str, str)  # (name, token, uid, mid, server_type)
 
     # 短信发送结果信号
-    sms_send_result = pyqtSignal(bool, str)  # (success, message_or_action_type)
+    sms_send_result = pyqtSignal(int, str, dict)  # (retcode, message, geetest_dict)
 
     # 短信登录结果信号（与login_success一致）
     sms_login_result = pyqtSignal(bool, str, str, str, str)  # (success, msg, uid, token, mid)
@@ -103,6 +104,7 @@ class LoginWindow(QDialog):
         self.current_ticket = ""
         self.remaining_seconds = 0
         self.sms_action_type = ""
+        self.sms_aigis = ""
 
         self.init_ui()
 
@@ -386,23 +388,18 @@ class LoginWindow(QDialog):
 
         self.sms_send_btn.setEnabled(False)
         self.sms_send_btn.setText("发送中...")
+        self.sms_aigis = ""  # 首次发送不带 aigis
 
         def do_send():
-            retcode, action_type, extra = self.api.send_sms_code(phone)
-
-            if retcode == 0:
-                self.sms_action_type = action_type
-                self.sms_send_result.emit(True, action_type)
-            elif retcode == -3002:
-                self.sms_send_result.emit(False, f"发送过于频繁: {action_type}")
-            else:
-                self.sms_send_result.emit(False, f"发送失败 (code={retcode})\n\n提示：可能触发了风控，请等待1-2分钟后重试，或使用扫码登录")
+            retcode, message, geetest = self.api.send_sms_code(phone)
+            self.sms_send_result.emit(retcode, message, geetest)
 
         threading.Thread(target=do_send, daemon=True).start()
 
-    def _on_sms_send_result(self, success: bool, message: str):
+    def _on_sms_send_result(self, retcode: int, message: str, geetest: dict):
         """短信发送结果处理（在主线程）"""
-        if success:
+        if retcode == 0:
+            self.sms_action_type = message  # message 即 action_type
             self.remaining_seconds = 60
             self.sms_confirm_btn.setEnabled(True)
             self.sms_send_btn.setText("发送")
@@ -410,11 +407,63 @@ class LoginWindow(QDialog):
             self.update_sms_timer()
             gui_log("验证码已发送")
             QMessageBox.information(self, "提示", "验证码已发送")
+            return
+
+        if retcode == -3101 and geetest:
+            # 需要人机验证：弹极验滑块，完成后用 aigis 重新申请验证码
+            self._handle_sms_geetest(geetest)
+            return
+
+        # 其余错误：恢复按钮并提示
+        self.sms_send_btn.setText("发送")
+        self.sms_send_btn.setEnabled(True)
+        if retcode == SMS_TRANSPORT_ERROR:
+            gui_log(f"短信发送结果未知: {message}", LogLevel.WARN)
+            QMessageBox.warning(self, "提示", message)
+        elif retcode == SMS_INVALID_RESPONSE:
+            gui_log(f"短信发送响应异常: {message}", LogLevel.ERROR)
+            QMessageBox.warning(self, "错误", message)
+        elif retcode == -3002:
+            QMessageBox.warning(self, "错误", message)
+        elif retcode == -3008:
+            QMessageBox.warning(self, "错误", message)
         else:
+            gui_log(f"短信发送失败: {message}", LogLevel.WARN)
+            QMessageBox.warning(self, "错误",
+                f"发送失败 (code={retcode})\n\n提示：可能触发了风控，请等待1-2分钟后重试，或使用扫码登录")
+
+    def _handle_sms_geetest(self, geetest: dict):
+        """弹出极验滑块，验证成功后用 aigis 重新申请短信验证码"""
+        gt = geetest.get("gt", "")
+        challenge = geetest.get("challenge", "")
+        if not gt:
+            QMessageBox.warning(self, "错误", "人机验证参数缺失，请稍后重试。")
             self.sms_send_btn.setText("发送")
             self.sms_send_btn.setEnabled(True)
-            gui_log(f"短信发送失败: {message}", LogLevel.WARN)
-            QMessageBox.warning(self, "错误", message)
+            return
+
+        success, geetest_result = verify_geetest(
+            gt, challenge, self,
+            use_v4=geetest.get("use_v4", False),
+            risk_type=geetest.get("risk_type", ""),
+            session_id=geetest.get("session_id", ""),
+        )
+        if not success or not geetest_result:
+            self.sms_send_btn.setText("发送")
+            self.sms_send_btn.setEnabled(True)
+            QMessageBox.warning(self, "提示", "人机验证未完成，请重试或使用扫码登录。")
+            return
+
+        aigis = build_aigis_header(geetest.get("session_id", ""), geetest_result)
+        self.sms_aigis = aigis
+
+        def do_resend():
+            retcode, message, geetest2 = self.api.send_sms_code(
+                self.sms_phone.text().strip(), aigis)
+            self.sms_send_result.emit(retcode, message, geetest2)
+
+        self.sms_send_btn.setText("验证通过，重新发送...")
+        threading.Thread(target=do_resend, daemon=True).start()
 
     def update_sms_timer(self):
         """更新短信倒计时"""
@@ -441,13 +490,17 @@ class LoginWindow(QDialog):
 
         def do_login():
             retcode, v2_token, uid, mid = self.api.login_by_sms(
-                phone, code, getattr(self, "sms_action_type", "")
+                phone, code, self.sms_action_type, aigis=self.sms_aigis
             )
 
             if retcode == 0:
                 self.sms_login_result.emit(True, "", uid, v2_token, mid)
             elif retcode == -3205:
                 self.sms_login_result.emit(False, "验证码错误", "", "", "")
+            elif retcode == SMS_TRANSPORT_ERROR:
+                self.sms_login_result.emit(False, "登录请求结果未知，请勿重复提交，稍后查看是否登录成功。", "", "", "")
+            elif retcode == SMS_INVALID_RESPONSE:
+                self.sms_login_result.emit(False, "登录响应格式异常，未添加账号，详见日志。", "", "", "")
             else:
                 self.sms_login_result.emit(False, f"登录失败 (code={retcode})", "", "", "")
 

@@ -27,6 +27,50 @@ def _get_log_dir() -> Path:
         return Path(__file__).parent.parent / "log"
 
 
+# ---- 日志脱敏：账号/凭证信息不得明文进入日志 ----
+# 说明：日志里曾明文打印整个请求头（Cookie: stoken=v2_xxx;mid=yyy），
+# 一旦分享日志即等于交出账号凭证。下面在 Logger._log 出口统一打码，
+# 保证任何调用点（现在或将来）都漏不出明文。
+
+# Cookie / 查询串中的凭证键
+_SENSITIVE_KEYS = (
+    "stoken_v2", "stoken", "ltoken_v2", "ltoken",
+    "cookie_token_v2", "cookie_token", "login_ticket",
+    "mid", "account_id", "ltuid",
+)
+_COOKIE_RE = re.compile(
+    r"((?:%s)\s*=\s*)([^;\s\"',}\]]+)" % "|".join(_SENSITIVE_KEYS), re.IGNORECASE)
+# JSON / dict repr 里的凭证值："token": "xxx"、'game_token': 'xxx'
+_JSON_TOKEN_RE = re.compile(
+    r"""(["'][^"']*?(?:token|session_id|captcha_output|pass_token)["']\s*:\s*["'])([^"']+)(["'])""",
+    re.IGNORECASE)
+# 短信登录下发的短期 token（v2_ 前缀长串）
+_V2_TOKEN_RE = re.compile(r"\bv2_[A-Za-z0-9._+/=-]{6,}")
+# 手机号 / 邮箱
+_PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def mask_sensitive(msg) -> str:
+    """对日志文本脱敏：凭证、token、mid、手机号、邮箱一律打码。
+
+    由 Logger._log 在出口处统一调用，控制台与日志文件同时生效。
+    脱敏自身绝不能抛异常影响日志输出，故整体兜 try。
+    """
+    if not msg:
+        return msg
+    try:
+        text = str(msg)
+        text = _COOKIE_RE.sub(lambda m: m.group(1) + "***", text)
+        text = _JSON_TOKEN_RE.sub(lambda m: m.group(1) + "***" + m.group(3), text)
+        text = _V2_TOKEN_RE.sub("v2_***", text)
+        text = _PHONE_RE.sub(lambda m: m.group(1)[:3] + "****" + m.group(1)[7:], text)
+        text = _EMAIL_RE.sub("***@***", text)
+        return text
+    except Exception:
+        return msg
+
+
 class OutputMode:
     """日志输出模式"""
     CONSOLE = "console"
@@ -169,7 +213,8 @@ class Logger:
             return
         timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         tag_part = f"[{tag}]" if tag != level else ""
-        line = f"[{timestamp}][{level}]{tag_part} {msg}"
+        # 出口脱敏：任何来源的日志都不含明文凭证/手机号/邮箱
+        line = f"[{timestamp}][{level}]{tag_part} {mask_sensitive(msg)}"
 
         if console_only:
             # 仅控制台输出，不写入文件

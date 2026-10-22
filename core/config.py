@@ -1,7 +1,7 @@
 """
 配置管理模块
 
-兼容 C++ Theresa-0328/MHY_Scanner 的 userinfo.json 格式，两种格式互通：
+兼容 C++ DSVVA/MHY_Scanner（原 Theresa-0328/MHY_Scanner）的 userinfo.json 格式，两种格式互通：
   - C++ 格式: account[n].{access_key, uid, name, type, note, mid}
   - Python 格式: accounts[n].{token, uid, name, server_type, game_type, notes, mid}
 
@@ -11,6 +11,8 @@ import json
 import os
 import sys
 import traceback
+import tempfile
+import threading
 from pathlib import Path
 from typing import Optional, List
 from dataclasses import dataclass, asdict, field
@@ -285,6 +287,7 @@ class ConfigManager:
         self._accounts_file = get_accounts_file_path()
         self._settings_file = get_settings_file_path()
         self._cookie_file = get_cookie_file_path()
+        self._save_lock = threading.RLock()  # 保护配置文件写入，避免并发写损坏
         self._config: AppConfig = self._load_config()
         config_log(f"账号配置文件: {self._accounts_file}")
         config_log(f"设置配置文件: {self._settings_file}")
@@ -355,16 +358,29 @@ class ConfigManager:
             except Exception as e:
                 error(f"加载 Cookie 文件失败: {e}\n{traceback.format_exc()}")
 
-    def _save_cookie(self):
-        """将 Cookie 保存到 cookie.json"""
+    def _atomic_write_json(self, path: Path, data: dict):
+        """原子写入 JSON：先写临时文件再 os.replace，避免写到一半崩溃损坏配置（与 C++ QSaveFile 对齐）"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
         try:
-            self._cookie_file.parent.mkdir(parents=True, exist_ok=True)
-            cookie_data = {
-                "douyin_cookie": self._config.douyin_cookie,
-                "bilibili_cookie": self._config.bilibili_cookie,
-            }
-            with open(self._cookie_file, 'w', encoding='utf-8') as f:
-                json.dump(cookie_data, f, ensure_ascii=False, indent=4)
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+            os.replace(tmp_path, str(path))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
+    def _save_cookie(self):
+        """将 Cookie 保存到 cookie.json（调用方应持有 _save_lock）"""
+        try:
+            with self._save_lock:
+                self._atomic_write_json(self._cookie_file, {
+                    "douyin_cookie": self._config.douyin_cookie,
+                    "bilibili_cookie": self._config.bilibili_cookie,
+                })
         except Exception as e:
             error(f"保存 Cookie 文件失败: {e}\n{traceback.format_exc()}")
 
@@ -376,38 +392,29 @@ class ConfigManager:
     def save_config(self):
         """保存全部配置：账号写入 userinfo.json，设置写入 config.json，Cookie 写入 cookie.json"""
         try:
-            # 保存账号数据 → userinfo.json
-            self._accounts_file.parent.mkdir(parents=True, exist_ok=True)
-            accounts_dict = self._config.to_accounts_dict()
-            with open(self._accounts_file, 'w', encoding='utf-8') as f:
-                json.dump(accounts_dict, f, ensure_ascii=False, indent=4)
-
-            # 保存应用设置 → config.json
-            self._settings_file.parent.mkdir(parents=True, exist_ok=True)
-            settings_dict = self._config.to_settings_dict()
-            with open(self._settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings_dict, f, ensure_ascii=False, indent=4)
-
-            # 保存 Cookie → cookie.json
-            self._save_cookie()
+            with self._save_lock:
+                self._atomic_write_json(self._accounts_file, self._config.to_accounts_dict())
+                self._atomic_write_json(self._settings_file, self._config.to_settings_dict())
+                self._atomic_write_json(self._cookie_file, {
+                    "douyin_cookie": self._config.douyin_cookie,
+                    "bilibili_cookie": self._config.bilibili_cookie,
+                })
         except Exception as e:
             error(f"保存配置失败: {e}\n{traceback.format_exc()}")
 
     def save_accounts(self):
         """仅保存账号数据到 userinfo.json（不触发 settings 写入）"""
         try:
-            self._accounts_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._accounts_file, 'w', encoding='utf-8') as f:
-                json.dump(self._config.to_accounts_dict(), f, ensure_ascii=False, indent=4)
+            with self._save_lock:
+                self._atomic_write_json(self._accounts_file, self._config.to_accounts_dict())
         except Exception as e:
             error(f"保存账号文件失败: {e}\n{traceback.format_exc()}")
 
     def save_settings(self):
         """仅保存应用设置到 config.json（不触发 accounts 写入）"""
         try:
-            self._settings_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._settings_file, 'w', encoding='utf-8') as f:
-                json.dump(self._config.to_settings_dict(), f, ensure_ascii=False, indent=4)
+            with self._save_lock:
+                self._atomic_write_json(self._settings_file, self._config.to_settings_dict())
         except Exception as e:
             error(f"保存设置文件失败: {e}\n{traceback.format_exc()}")
 
